@@ -7,6 +7,13 @@ export type { AttachmentId } from './brand.ts'
 /** Raster image formats accepted by the version-one attachment path. */
 export type ImageMediaType = 'image/png' | 'image/jpeg' | 'image/webp' | 'image/gif'
 
+/**
+ * Any media type accepted by the generic file attachment path. Audio and
+ * video types are refused by policy (`FileAttachmentLimits.denyMediaTypes`),
+ * not by this type, so deployments may relax or extend the policy.
+ */
+export type FileMediaType = string
+
 /** Durable, serializable metadata for one immutable image object. */
 export interface ImageAttachmentRef {
   /** Opaque storage identifier; never a filesystem path or bearer URL. */
@@ -44,5 +51,54 @@ export interface SaveImageAttachment {
 /** Stored image bytes returned after reference and digest verification. */
 export interface StoredImageAttachment {
   ref: ImageAttachmentRef
+  data: Uint8Array
+}
+
+/** Durable, serializable metadata for one immutable non-image file object. */
+export interface FileAttachmentRef {
+  /** Opaque storage identifier; never a filesystem path or bearer URL. */
+  attachmentId: AttachmentId
+  /** Media type verified by the configured admission policy. */
+  mediaType: FileMediaType
+  /** Exact encoded byte length. */
+  bytes: number
+  /** Optional display name stripped of local path information. */
+  name?: string
+}
+
+/** Deployment-resolved limits used by file upload admission. */
+export interface FileAttachmentLimits {
+  /** Maximum encoded bytes accepted for one file. */
+  maxFileBytes: number
+  /** Maximum file count accepted in one submitted message. */
+  maxFilesPerMessage: number
+  /** Maximum aggregate encoded file bytes accepted in one submitted message. */
+  maxMessageFileBytes: number
+  /**
+   * Optional explicit allow list. When present, a declared media type must
+   * match one entry (`type/subtype` or `type/*`); an empty array means every
+   * type that is not denied is accepted.
+   */
+  allowedMediaTypes?: readonly string[]
+  /**
+   * Media types refused regardless of the allow list (`audio/*`, `video/*`,
+   * exact `type/subtype`). Audio/video defaults are supplied by the local
+   * store so a mis-declared container is still caught by the magic guard.
+   */
+  denyMediaTypes?: readonly string[]
+}
+
+/** Request to validate and durably commit one non-image file. */
+export interface SaveFileAttachment {
+  data: Uint8Array
+  /** Caller-declared media type, checked against the deployment policy. */
+  mediaType: FileMediaType
+  /** Optional browser/provider display name; it is never interpreted as a path. */
+  name?: string
+}
+
+/** Stored file bytes returned after reference and digest verification. */
+export interface StoredFileAttachment {
+  ref: FileAttachmentRef
   data: Uint8Array
 }
