@@ -4744,6 +4744,9 @@ importers:
       '@deepseek-ai/dsh-host-directory-picker':
         specifier: workspace:^
         version: link:../directory-picker
+      '@deepseek-ai/dsh-host-webserver':
+        specifier: workspace:^
+        version: link:../webserver
       '@deepseek-ai/dsh-jobs':
         specifier: workspace:^
         version: link:../../jobs/jobs
