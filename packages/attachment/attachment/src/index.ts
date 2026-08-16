@@ -14,6 +14,7 @@ import type {
 
 export { AttachmentId } from './brand.ts'
 export { AttachmentError } from './error.ts'
+export { ocrImagePng, ocrPdfPage, tessdataDir } from './ocr.ts'
 export { extractFileText, shouldExtractText } from './text.ts'
 export type {
   AttachmentId as AttachmentIdType,

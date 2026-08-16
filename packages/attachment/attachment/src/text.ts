@@ -90,6 +90,10 @@ const MAX_PDF_PAGES = 200
 const MAX_XLSX_ROWS = 2_000
 /** PPTX slides parsed per attachment. */
 const MAX_PPTX_SLIDES = 100
+/** PDF pages OCR'd when the text layer is too sparse to read (scanned PDFs). */
+const MAX_OCR_PAGES = 10
+/** Extracted PDF text below this many characters triggers OCR. */
+const OCR_MIN_CHARS = 30
 
 function decodeUtf16(data: Uint8Array): string | undefined {
   try {
@@ -115,6 +119,7 @@ function decodeGb18030(data: Uint8Array): string | undefined {
 
 async function extractPdfText(data: Uint8Array): Promise<string> {
   const { getDocument } = await import('pdfjs-dist/legacy/build/pdf.mjs')
+  const { ocrPdfPage } = await import('./ocr.ts')
   const loadingTask = getDocument({
     data,
     useSystemFonts: true,
@@ -122,6 +127,7 @@ async function extractPdfText(data: Uint8Array): Promise<string> {
   const doc = await loadingTask.promise
   try {
     const parts: string[] = []
+    const pageTexts: string[] = []
     const pages = Math.min(doc.numPages, MAX_PDF_PAGES)
     for (let pageNumber = 1; pageNumber <= pages; pageNumber++) {
       const page = await doc.getPage(pageNumber)
@@ -129,13 +135,36 @@ async function extractPdfText(data: Uint8Array): Promise<string> {
       const text = content.items
         .map(item => 'str' in item ? item.str : '')
         .join(' ')
-      parts.push(text.trim())
+      const trimmed = text.trim()
+      pageTexts.push(trimmed)
+      parts.push(trimmed)
       page.cleanup()
     }
     if (doc.numPages > MAX_PDF_PAGES) {
       parts.push(`…[truncated: ${doc.numPages} pages total]`)
     }
-    return parts.join('\n')
+    const textLayer = parts.join('\n')
+    // Scanned PDFs carry no usable text layer; OCR the first pages so the
+    // model still reads the document content (ChatGPT/Claude web parity).
+    const extractedChars = pageTexts.reduce((sum, text) => sum + text.length, 0)
+    if (extractedChars < OCR_MIN_CHARS && doc.numPages > 0) {
+      const ocrLines: string[] = []
+      const ocrPages = Math.min(doc.numPages, MAX_OCR_PAGES)
+      for (let pageNumber = 1; pageNumber <= ocrPages; pageNumber++) {
+        try {
+          const page = await doc.getPage(pageNumber)
+          const ocrText = (await ocrPdfPage(page)).trim()
+          page.cleanup()
+          if (ocrText !== '') ocrLines.push(`[OCR page ${pageNumber}]\n${ocrText}`)
+        } catch {
+          // A single unreadable page must not fail the whole attachment.
+        }
+      }
+      if (ocrLines.length > 0) {
+        return `${textLayer === '' ? '' : `${textLayer}\n`}${ocrLines.join('\n\n')}`
+      }
+    }
+    return textLayer
   } finally {
     await loadingTask.destroy()
   }

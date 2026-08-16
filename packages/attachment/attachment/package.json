@@ -19,13 +19,15 @@
     "./src/*": "./src/*",
     "./package.json": "./package.json"
   },
-  "files": ["lib/index.js", "lib/invariant.js", "lib/types/**/*.d.ts"],
+  "files": ["lib/index.js", "lib/invariant.js", "lib/types/**/*.d.ts", "assets/**"],
   "license": "MIT",
   "dependencies": {
+    "@napi-rs/canvas": "^1.0.6",
     "jszip": "^3.10.1",
     "mammoth": "^1.12.1",
     "pdfjs-dist": "^6.2.108",
-    "read-excel-file": "^9.3.10"
+    "read-excel-file": "^9.3.10",
+    "tesseract.js": "^7.0.0"
   },
   "peerDependencies": {
     "@deepseek-ai/dsh-brand": "workspace:^",
