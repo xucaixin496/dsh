@@ -3,6 +3,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
+import { AttachmentId } from '@deepseek-ai/dsh-attachment'
 import type { FileAttachmentLimits } from '@deepseek-ai/dsh-attachment'
 import { readFileFile, saveFileFile, validateFileFile } from '../src/store.ts'
 
@@ -71,7 +72,7 @@ describe('local file attachment store', () => {
     const ref = await saveFileFile(storageRoot, { data: TEXT, mediaType: 'text/plain' }, LIMITS)
     await expect(readFileFile(storageRoot, { ...ref, attachmentId: ref.attachmentId, bytes: ref.bytes })).resolves.toBeDefined()
 
-    const missing = { ...ref, attachmentId: 'sha256:' + 'a'.repeat(64) }
+    const missing = { ...ref, attachmentId: AttachmentId('sha256:' + 'a'.repeat(64)) }
     await expect(readFileFile(storageRoot, missing)).rejects.toMatchObject({ code: 'ATTACHMENT_NOT_FOUND' })
 
     // Overwrite the stored object with different bytes: digest verification must fail.

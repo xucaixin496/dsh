@@ -46,6 +46,7 @@ const EXPECTED_TOOLS = [
   'list_agents',
   'ralph',
   'read',
+  'read_attachment',
   'read_image',
   'send_message',
   'skill',

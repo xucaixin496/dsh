@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { AttachmentId } from '@deepseek-ai/dsh-attachment'
+import { CallId } from '../src/brand.ts'
 import { contentHasFile, fileBlockText } from '../src/content.ts'
 import type { ContentBlock } from '../src/types.ts'
 
@@ -17,7 +18,7 @@ const FILE_BLOCK: ContentBlock = {
 describe('file content helpers', () => {
   it('detects file blocks including nested tool results', () => {
     expect(contentHasFile([FILE_BLOCK])).toBe(true)
-    expect(contentHasFile([{ type: 'tool-result', toolCallId: 't1', content: [FILE_BLOCK] }])).toBe(true)
+    expect(contentHasFile([{ type: 'tool-result', toolCallId: CallId('t1'), content: [FILE_BLOCK] }])).toBe(true)
     expect(contentHasFile([{ type: 'text', text: 'plain' }])).toBe(false)
     expect(contentHasFile([])).toBe(false)
   })

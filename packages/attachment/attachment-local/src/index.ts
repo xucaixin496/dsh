@@ -54,9 +54,9 @@ export interface Config {
   /** Maximum aggregate generic-file bytes accepted in one submitted message. */
   maxMessageFileBytes?: number
   /** Optional explicit generic-file media-type allow list. */
-  allowedMediaTypes?: readonly string[]
+  allowedMediaTypes?: string[]
   /** Generic-file media-type deny list; defaults to audio/video. */
-  denyMediaTypes?: readonly string[]
+  denyMediaTypes?: string[]
 }
 
 /** Persistent content-addressed local attachment store. */

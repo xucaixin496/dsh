@@ -148,8 +148,16 @@ describe('Web session model selection', () => {
         maxImagePixels: 4,
         mediaTypes: ['image/png'],
       },
+      fileLimits: {
+        maxFileBytes: 4,
+        maxFilesPerMessage: 2,
+        maxMessageFileBytes: 4,
+      },
       validateImage,
       saveImage,
+      validateFile: vi.fn(() => Promise.resolve()),
+      saveFile: vi.fn(),
+      readFile: vi.fn(),
     } as never)
     const followup = vi.fn()
     Object.assign(agent, { followup })
@@ -193,6 +201,66 @@ describe('Web session model selection', () => {
       error: { code: 'attachment-error', details: { reason: 'TOO_MANY_IMAGES' } },
     })
     expect(saveImage).toHaveBeenCalledTimes(2)
+    await ctx.fiber.dispose()
+  })
+
+  it('validates and persists a generic file batch with a text projection', async () => {
+    const { ctx, agent, sessionId } = await harness()
+    const validateFile = vi.fn((_input: { data: Uint8Array }) => Promise.resolve())
+    const saveFile = vi.fn((input: { data: Uint8Array; mediaType: string; name?: string }) => Promise.resolve({
+      attachmentId: `file-${String(input.data[0])}`,
+      mediaType: input.mediaType,
+      bytes: input.data.byteLength,
+      name: input.name,
+    }))
+    ctx.provide('attachments', {
+      imageLimits: {
+        maxImageBytes: 4,
+        maxImagesPerMessage: 2,
+        maxMessageImageBytes: 4,
+        maxImagePixels: 4,
+        mediaTypes: ['image/png'],
+      },
+      fileLimits: {
+        maxFileBytes: 1024,
+        maxFilesPerMessage: 2,
+        maxMessageFileBytes: 2048,
+      },
+      validateImage: vi.fn(() => Promise.resolve()),
+      saveImage: vi.fn(),
+      validateFile,
+      saveFile,
+      readFile: vi.fn(),
+    } as never)
+    const followup = vi.fn()
+    Object.assign(agent, { followup })
+    const api = createApiProxy(ctx, {
+      defaultModelSelection: () => ({ provider: 'deepseek-official', model: 'deepseek-chat' }),
+      cwd: '/tmp',
+    })
+    const result = await api.sessions.prompt(request({
+      sessionId,
+      mode: 'queue',
+      content: [
+        { type: 'file', mediaType: 'text/plain', name: 'note.txt', data: Buffer.from('hello file').toString('base64') },
+      ],
+    }))
+    expect(result.result.ok).toBe(true)
+    expect(validateFile).toHaveBeenCalledTimes(1)
+    expect(saveFile).toHaveBeenCalledTimes(1)
+    const message = followup.mock.calls[0]?.[0] as UserMessage
+    expect(message.content).toEqual([
+      {
+        type: 'file',
+        attachment: {
+          attachmentId: 'file-104',
+          mediaType: 'text/plain',
+          bytes: 10,
+          name: 'note.txt',
+        },
+        text: 'hello file',
+      },
+    ])
     await ctx.fiber.dispose()
   })
 

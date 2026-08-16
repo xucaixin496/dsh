@@ -10,9 +10,12 @@ import { FiberState, Inject, RegistryService, ValidationError } from '@deepseek-
 import type { Context, Plugin } from '@deepseek-ai/cordis'
 import { AttachmentStore } from '@deepseek-ai/dsh-attachment'
 import type {
+  FileAttachmentLimits,
+  FileAttachmentRef,
   ImageAttachmentLimits,
   ImageAttachmentRef,
   SaveImageAttachment,
+  StoredFileAttachment,
   StoredImageAttachment,
 } from '@deepseek-ai/dsh-attachment'
 import InvariantRegistry from '@deepseek-ai/dsh-invariants'
@@ -118,6 +121,23 @@ class TestAttachmentStore extends AttachmentStore {
     maxMessageImageBytes: 1,
     maxImagePixels: 1,
     mediaTypes: ['image/png'],
+  }
+  readonly fileLimits: FileAttachmentLimits = {
+    maxFileBytes: 1,
+    maxFilesPerMessage: 1,
+    maxMessageFileBytes: 1,
+  }
+
+  validateFile(): Promise<void> {
+    return Promise.reject(new Error('test invariant attachment store does not validate files'))
+  }
+
+  saveFile(): Promise<FileAttachmentRef> {
+    return Promise.reject(new Error('test invariant attachment store does not save files'))
+  }
+
+  readFile(): Promise<StoredFileAttachment> {
+    return Promise.reject(new Error('test invariant attachment store does not read files'))
   }
 
   validateImage(_input: SaveImageAttachment): Promise<void> {

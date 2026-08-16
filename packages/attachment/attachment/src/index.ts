@@ -14,6 +14,7 @@ import type {
 
 export { AttachmentId } from './brand.ts'
 export { AttachmentError } from './error.ts'
+export { extractFileText, shouldExtractText } from './text.ts'
 export type {
   AttachmentId as AttachmentIdType,
   FileAttachmentLimits,

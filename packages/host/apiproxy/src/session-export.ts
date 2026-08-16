@@ -21,7 +21,7 @@
 
 import { Zip, ZipDeflate } from 'fflate'
 import type { Context } from '@deepseek-ai/cordis'
-import type { AttachmentStore, ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
+import type { AttachmentStore, FileAttachmentRef, ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
 import type { SessionLineageNode, SessionQueryEngine } from '@deepseek-ai/dsh-session-query'
 import type { SessionId, SessionStore } from '@deepseek-ai/dsh-session'
 import type { SessionPersistence, SessionRawArtifact } from '@deepseek-ai/dsh-session-persistence'
@@ -106,6 +106,98 @@ const MEDIA_TYPE_EXTENSIONS: Record<ImageAttachmentRef['mediaType'], string> = {
  */
 function mediaEntryPath(ref: ImageAttachmentRef): string {
   return `media/${String(ref.attachmentId)}.${MEDIA_TYPE_EXTENSIONS[ref.mediaType]}`
+}
+
+/** Zip extension for common generic-file media types (name extension wins). */
+const FILE_MEDIA_TYPE_EXTENSIONS: Record<string, string> = {
+  'application/pdf': 'pdf',
+  'application/zip': 'zip',
+  'application/gzip': 'gz',
+  'application/x-tar': 'tar',
+  'application/x-7z-compressed': '7z',
+  'application/x-rar-compressed': 'rar',
+  'application/msword': 'doc',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document': 'docx',
+  'application/vnd.ms-excel': 'xls',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': 'xlsx',
+  'application/vnd.ms-powerpoint': 'ppt',
+  'application/vnd.openxmlformats-officedocument.presentationml.presentation': 'pptx',
+}
+
+/** Safe archive extension for one generic-file reference. */
+function fileMediaExtension(ref: FileAttachmentRef): string {
+  if (ref.name !== undefined) {
+    const leaf = ref.name.slice(Math.max(ref.name.lastIndexOf('/'), ref.name.lastIndexOf('\\')) + 1)
+    const dot = leaf.lastIndexOf('.')
+    if (dot >= 0) {
+      const ext = leaf.slice(dot + 1).replace(/[^A-Za-z0-9]/g, '').slice(0, 12)
+      if (ext !== '') return ext
+    }
+  }
+  return FILE_MEDIA_TYPE_EXTENSIONS[ref.mediaType] ?? 'bin'
+}
+
+/** The zip path for one generic-file object, content-addressed by attachment id. */
+function fileMediaEntryPath(ref: FileAttachmentRef): string {
+  return `media/${String(ref.attachmentId)}.${fileMediaExtension(ref)}`
+}
+
+/**
+ * Collect every generic-file reference inside one content array, descending
+ * into nested tool results the way the live attachment route does.
+ * @param content - an event content array (or nested tool-result content).
+ * @param refs - the dedupe map being filled (keyed by attachment id).
+ */
+function collectFileRefs(content: unknown, refs: Map<string, FileAttachmentRef>): void {
+  if (!Array.isArray(content)) return
+  const pending: unknown[] = []
+  for (const item of content) pending.push(item)
+  while (pending.length > 0) {
+    const value = pending.pop()
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) continue
+    const block = value as { type?: unknown; attachment?: unknown; content?: unknown }
+    if (block.type === 'file' && typeof block.attachment === 'object' && block.attachment !== null) {
+      const ref = block.attachment as FileAttachmentRef
+      refs.set(String(ref.attachmentId), ref)
+    }
+    if (Array.isArray(block.content)) {
+      for (const item of block.content) pending.push(item)
+    }
+  }
+}
+
+/** Collect every generic-file reference one session event carries. */
+function collectEventFileRefs(event: unknown, refs: Map<string, FileAttachmentRef>): void {
+  const data = (event as { data?: unknown }).data
+  if (typeof data !== 'object' || data === null) return
+  const carrier = data as {
+    content?: unknown
+    message?: { content?: unknown }
+    inserted?: Array<{ content?: unknown }>
+    chunk?: { type?: unknown; block?: unknown }
+  }
+  collectFileRefs(carrier.content, refs)
+  if (carrier.message !== undefined) collectFileRefs(carrier.message.content, refs)
+  if (carrier.inserted !== undefined) {
+    for (const message of carrier.inserted) collectFileRefs(message.content, refs)
+  }
+  if (carrier.chunk?.type === 'block-end') collectFileRefs([carrier.chunk.block], refs)
+}
+
+/** Collect the distinct generic-file references one stored artifact text names. */
+function fileRefsInArtifact(content: string): Map<string, FileAttachmentRef> {
+  const refs = new Map<string, FileAttachmentRef>()
+  for (const line of content.split('\n')) {
+    if (line === '') continue
+    let event: unknown
+    try {
+      event = JSON.parse(line)
+    } catch {
+      continue
+    }
+    collectEventFileRefs(event, refs)
+  }
+  return refs
 }
 
 /**
@@ -224,8 +316,10 @@ export async function* sessionLogZipEntries(
   signal?: AbortSignal,
 ): AsyncGenerator<SessionLogZipEntry> {
   const media = new Map<string, ImageAttachmentRef>()
+  const fileMedia = new Map<string, FileAttachmentRef>()
   const rememberMedia = (content: string): void => {
     for (const [id, ref] of imageRefsInArtifact(content)) media.set(id, ref)
+    for (const [id, ref] of fileRefsInArtifact(content)) fileMedia.set(id, ref)
   }
   rememberMedia(root.content)
   yield { path: root.filename, content: root.content }
@@ -262,6 +356,12 @@ export async function* sessionLogZipEntries(
     const stored = await deps.attachments.readImage(ref, signal)
     signal?.throwIfAborted()
     yield { path: mediaEntryPath(ref), data: stored.data }
+  }
+  for (const ref of fileMedia.values()) {
+    signal?.throwIfAborted()
+    const stored = await deps.attachments.readFile(ref, signal)
+    signal?.throwIfAborted()
+    yield { path: fileMediaEntryPath(ref), data: stored.data }
   }
 }
 

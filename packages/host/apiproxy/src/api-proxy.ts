@@ -10,8 +10,8 @@ import type { Context } from '@deepseek-ai/cordis'
 import { installModelSelection } from '@deepseek-ai/dsh-agent'
 import type { Agent, ModelSelection, ModelSelectionRef, AgentOptions, AgentStatus } from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-agent-presets/types'
-import { AttachmentError } from '@deepseek-ai/dsh-attachment'
-import type { ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
+import { AttachmentError, extractFileText } from '@deepseek-ai/dsh-attachment'
+import type { FileAttachmentRef, ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
 import { contentHasImage, createUserMessage, freezeMessage, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import { errorChain } from '@deepseek-ai/dsh-llm'
 import type { ContentBlock, MessageSource } from '@deepseek-ai/dsh-llm'
@@ -90,7 +90,7 @@ import type { ApprovalOutcome, ApprovalRequestId } from '@deepseek-ai/dsh-user-a
 // `ctx.get('approval')` without a value dependency on the seam (optional composition).
 import type {} from '@deepseek-ai/dsh-user-approval'
 import { approvalResponsePayloadSchema } from './api/approvals.schema.ts'
-import { imageLimitsProjectionSchema, sessionListMetadataProjectionSchema } from './api/sessions.schema.ts'
+import { fileLimitsProjectionSchema, imageLimitsProjectionSchema, sessionListMetadataProjectionSchema } from './api/sessions.schema.ts'
 import { questionResponsePayloadSchema } from './api/questions.schema.ts'
 import type { ClientResponse, RpcError, RpcReceipt, RpcRequest, RpcResponse } from './api/rpc.ts'
 import { RpcId } from './api/rpc.ts'
@@ -147,28 +147,49 @@ function decodeBase64(data: string): Uint8Array {
   return new Uint8Array(decoded)
 }
 
-/** Validate one prompt as a batch before publishing any durable image object. */
+/** Validate one prompt as a batch before publishing any durable attachment object. */
 async function durablePromptContent(ctx: Context, content: readonly PromptContentPart[]): Promise<ContentBlock[]> {
   if (content.every(part => part.type === 'text')) {
     return content.map(part => ({ type: 'text', text: part.text }))
   }
-  const limits = ctx.attachments.imageLimits
-  if (content.filter(part => part.type === 'image').length > limits.maxImagesPerMessage) {
+  const imageLimits = ctx.attachments.imageLimits
+  const fileLimits = ctx.attachments.fileLimits
+  const images = content.filter((part): part is Extract<PromptContentPart, { type: 'image' }> => part.type === 'image')
+  const files = content.filter((part): part is Extract<PromptContentPart, { type: 'file' }> => part.type === 'file')
+  if (images.length > imageLimits.maxImagesPerMessage) {
     throw new AttachmentError('Prompt exceeds the configured image-count limit.', 'TOO_MANY_IMAGES')
+  }
+  if (files.length > fileLimits.maxFilesPerMessage) {
+    throw new AttachmentError('Prompt exceeds the configured file-count limit.', 'TOO_MANY_FILES')
   }
   const prepared = content.map(part => part.type === 'text'
     ? part
     : { part, data: decodeBase64(part.data) })
-  const images = prepared.filter((part): part is Extract<typeof part, { data: Uint8Array }> => 'data' in part)
-  const totalBytes = images.reduce((sum, image) => sum + image.data.byteLength, 0)
-  if (totalBytes > limits.maxMessageImageBytes) {
+  const binary = prepared.filter((part): part is Extract<typeof part, { data: Uint8Array }> => 'data' in part)
+  const imageBytes = binary
+    .filter(item => item.part.type === 'image')
+    .reduce((sum, image) => sum + image.data.byteLength, 0)
+  const fileBytes = binary
+    .filter(item => item.part.type === 'file')
+    .reduce((sum, file) => sum + file.data.byteLength, 0)
+  if (imageBytes > imageLimits.maxMessageImageBytes) {
     throw new AttachmentError('Prompt exceeds the configured aggregate image-byte limit.', 'IMAGES_TOO_LARGE')
   }
-  for (const image of images) {
+  if (fileBytes > fileLimits.maxMessageFileBytes) {
+    throw new AttachmentError('Prompt exceeds the configured aggregate file-byte limit.', 'FILES_TOO_LARGE')
+  }
+  for (const image of binary.filter(item => item.part.type === 'image')) {
     await ctx.attachments.validateImage({
       data: image.data,
-      mediaType: image.part.mediaType,
+      mediaType: image.part.mediaType as ImageAttachmentRef['mediaType'],
       ...image.part.name === undefined ? {} : { name: image.part.name },
+    })
+  }
+  for (const file of binary.filter(item => item.part.type === 'file')) {
+    await ctx.attachments.validateFile({
+      data: file.data,
+      mediaType: file.part.mediaType,
+      ...file.part.name === undefined ? {} : { name: file.part.name },
     })
   }
   const blocks: ContentBlock[] = []
@@ -177,12 +198,22 @@ async function durablePromptContent(ctx: Context, content: readonly PromptConten
       blocks.push({ type: 'text', text: item.text })
       continue
     }
-    const attachment = await ctx.attachments.saveImage({
+    if (item.part.type === 'image') {
+      const attachment = await ctx.attachments.saveImage({
+        data: item.data,
+        mediaType: item.part.mediaType as ImageAttachmentRef['mediaType'],
+        ...item.part.name === undefined ? {} : { name: item.part.name },
+      })
+      blocks.push({ type: 'image', attachment })
+      continue
+    }
+    const attachment = await ctx.attachments.saveFile({
       data: item.data,
       mediaType: item.part.mediaType,
       ...item.part.name === undefined ? {} : { name: item.part.name },
     })
-    blocks.push({ type: 'image', attachment })
+    const text = extractFileText(item.data, item.part.mediaType, item.part.name)
+    blocks.push({ type: 'file', attachment, ...(text === undefined ? {} : { text }) })
   }
   return blocks
 }
@@ -240,6 +271,59 @@ function messagesHaveImage(messages: readonly { content: readonly ContentBlock[]
 function referencedImage(events: readonly SessionEvent[], attachmentId: string): ImageAttachmentRef | undefined {
   for (const event of events) {
     const found = imageInEvent(event, ref => String(ref.attachmentId) === attachmentId)
+    if (found !== undefined) return found
+  }
+  return undefined
+}
+
+/** Search durable content for a file reference, including nested tool results. */
+function fileBlockIn(content: unknown, match: (ref: FileAttachmentRef) => boolean): FileAttachmentRef | undefined {
+  if (!Array.isArray(content)) return undefined
+  for (const value of content) {
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) continue
+    const block = value as { type?: unknown; attachment?: unknown; content?: unknown }
+    if (block.type === 'file' && typeof block.attachment === 'object' && block.attachment !== null) {
+      const ref = block.attachment as FileAttachmentRef
+      if (match(ref)) return ref
+    }
+    if (block.type === 'tool-result') {
+      const nested = fileBlockIn(block.content, match)
+      if (nested !== undefined) return nested
+    }
+  }
+  return undefined
+}
+
+/** Search every durable event carrier that can own model-visible file content. */
+function fileInEvent(event: SessionEvent, match: (ref: FileAttachmentRef) => boolean): FileAttachmentRef | undefined {
+  const data = event.data as {
+    content?: unknown
+    message?: { content?: unknown }
+    inserted?: Array<{ content?: unknown }>
+    chunk?: { type?: unknown; block?: unknown }
+  }
+  const direct = fileBlockIn(data.content, match)
+  if (direct !== undefined) return direct
+  if (data.message !== undefined) {
+    const wrapped = fileBlockIn(data.message.content, match)
+    if (wrapped !== undefined) return wrapped
+  }
+  if (data.inserted !== undefined) {
+    for (const message of data.inserted) {
+      const inserted = fileBlockIn(message.content, match)
+      if (inserted !== undefined) return inserted
+    }
+  }
+  if (event.type === 'assistant/chunk' && data.chunk?.type === 'block-end') {
+    return fileBlockIn([data.chunk.block], match)
+  }
+  return undefined
+}
+
+/** Resolve the first file reference matching one opaque id. */
+function referencedFile(events: readonly SessionEvent[], attachmentId: string): FileAttachmentRef | undefined {
+  for (const event of events) {
+    const found = fileInEvent(event, ref => String(ref.attachmentId) === attachmentId)
     if (found !== undefined) return found
   }
   return undefined
@@ -1319,6 +1403,20 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
       init: () => null,
       apply: state => state,
       view: () => projectionCtx.attachments.imageLimits,
+      stateVersion: 1,
+    })
+  })
+
+  // The fileLimits projection unit mirrors imageLimits: boot-constant, pure
+  // fold, absent while no attachment service is composed. Clients pre-check
+  // generic-file intake from it exactly like the image pre-check.
+  ctx.inject(['sessionProjections', 'attachments'], (projectionCtx) => {
+    projectionCtx.sessionProjections.register<'fileLimits', null>({
+      key: 'fileLimits',
+      schema: fileLimitsProjectionSchema,
+      init: () => null,
+      apply: state => state,
+      view: () => projectionCtx.attachments.fileLimits,
       stateVersion: 1,
     })
   })
@@ -2535,34 +2633,64 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
             details: {},
           })
         }
-        const ref = referencedImage(state.events, String(attachmentId))
-        if (ref === undefined) {
+        const imageRef = referencedImage(state.events, String(attachmentId))
+        if (imageRef !== undefined) {
+          try {
+            const stored = await ctx.attachments.readImage(imageRef)
+            return ok(request, {
+              attachment: stored.ref,
+              data: Buffer.from(stored.data).toString('base64'),
+            })
+          } catch (error: unknown) {
+            if (error instanceof AttachmentError) {
+              return err(request, {
+                code: 'attachment-error',
+                message: error.message,
+                details: { reason: error.code },
+              })
+            }
+            return err(request, {
+              code: 'internal',
+              message: 'Unable to read image attachment.',
+              details: {},
+            })
+          }
+        }
+        const fileRef = referencedFile(state.events, String(attachmentId))
+        if (fileRef !== undefined) {
+          try {
+            const stored = await ctx.attachments.readFile(fileRef)
+            return ok(request, {
+              attachment: stored.ref,
+              data: Buffer.from(stored.data).toString('base64'),
+            })
+          } catch (error: unknown) {
+            if (error instanceof AttachmentError) {
+              return err(request, {
+                code: 'attachment-error',
+                message: error.message,
+                details: { reason: error.code },
+              })
+            }
+            return err(request, {
+              code: 'internal',
+              message: 'Unable to read file attachment.',
+              details: {},
+            })
+          }
+        }
+        if (imageRef === undefined && fileRef === undefined) {
           return err(request, {
             code: 'attachment-error',
-            message: 'Image is not referenced by this session.',
+            message: 'Attachment is not referenced by this session.',
             details: { reason: 'ATTACHMENT_NOT_REFERENCED' },
           })
         }
-        try {
-          const stored = await ctx.attachments.readImage(ref)
-          return ok(request, {
-            attachment: stored.ref,
-            data: Buffer.from(stored.data).toString('base64'),
-          })
-        } catch (error: unknown) {
-          if (error instanceof AttachmentError) {
-            return err(request, {
-              code: 'attachment-error',
-              message: error.message,
-              details: { reason: error.code },
-            })
-          }
-          return err(request, {
-            code: 'internal',
-            message: 'Unable to read image attachment.',
-            details: {},
-          })
-        }
+        return err(request, {
+          code: 'internal',
+          message: 'Unable to resolve attachment reference.',
+          details: {},
+        })
       },
 
       updateQueue(request) {
