@@ -4,7 +4,7 @@
  * @module dsh-llm-pi-ai/context
  */
 
-import { CallId, contentHasImage, LlmError } from '@deepseek-ai/dsh-llm'
+import { CallId, contentHasImage, fileBlockText, LlmError } from '@deepseek-ai/dsh-llm'
 import type { ContentBlock, GenerateOptions, Message } from '@deepseek-ai/dsh-llm'
 import type { AttachmentStore } from '@deepseek-ai/dsh-attachment'
 import type { Context as PiContext, ImageContent, Message as PiMessage, TextContent, Tool as PiTool } from '@earendil-works/pi-ai'
@@ -45,6 +45,11 @@ async function userContent(
         })
         break
       }
+      case 'file':
+        // pi-ai is a multimodal wire, but the model cannot consume arbitrary
+        // file bytes; the text projection carries metadata and extracted text.
+        content.push({ type: 'text', text: fileBlockText(block) })
+        break
       case 'tool-result':
         {
           const nested = await userContent(block.content, attachments)

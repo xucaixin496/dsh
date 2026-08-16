@@ -5,7 +5,7 @@
  */
 
 import type { Branded } from '@deepseek-ai/dsh-brand'
-import type { ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
+import type { FileAttachmentRef, ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
 import type { CallId, ProviderRequestId, ReasoningEffortId } from './brand.ts'
 import type { Message } from './message.ts'
 
@@ -74,6 +74,20 @@ export interface ImageBlock {
   attachment: ImageAttachmentRef
 }
 
+/**
+ * A durable non-image file reference, valid in user or assistant content.
+ * The attachment service owns the immutable bytes; `text` is an optional
+ * server-side text projection for byte streams that decode as text, so
+ * text-only adapters can render the file without silently dropping it.
+ */
+export interface FileBlock {
+  type: 'file'
+  /** Immutable bytes and display metadata owned by the attachment service. */
+  attachment: FileAttachmentRef
+  /** Optional decoded text projection; omitted for opaque binary files. */
+  text?: string
+}
+
 /** A tool invocation requested by the model. */
 export interface ToolCallBlock {
   type: 'tool-call'
@@ -100,6 +114,7 @@ export interface ContentBlockMap {
   'text': TextBlock
   'reasoning': ReasoningBlock
   'image': ImageBlock
+  'file': FileBlock
   'tool-call': ToolCallBlock
   'tool-result': ToolResultBlock
 }

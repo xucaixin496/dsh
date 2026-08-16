@@ -9,6 +9,70 @@ function request(overrides: Partial<GenerateOptions> = {}): GenerateOptions {
 }
 
 describe('serializeMessages', () => {
+  it('projects file attachments as text on the text-only wire', () => {
+    const wire = serializeMessages([
+      createUserMessage({
+        content: [
+          {
+            type: 'file',
+            attachment: {
+              attachmentId: AttachmentId('sha256:' + 'a'.repeat(64)),
+              mediaType: 'application/pdf',
+              bytes: 12,
+              name: 'report.pdf',
+            },
+            text: 'annual summary',
+          },
+        ],
+        source: { kind: 'plugin', plugin: 'test' },
+      }),
+    ])
+    expect(wire).toEqual([{
+      role: 'user',
+      content: '[Attachment: report.pdf (application/pdf, 12 bytes)]\nannual summary',
+    }])
+  })
+
+  it('keeps the metadata header when a file block has no text projection', () => {
+    const wire = serializeMessages([
+      createUserMessage({
+        content: [
+          {
+            type: 'file',
+            attachment: {
+              attachmentId: AttachmentId('sha256:' + 'b'.repeat(64)),
+              mediaType: 'application/zip',
+              bytes: 9,
+              name: 'bundle.zip',
+            },
+          },
+        ],
+        source: { kind: 'plugin', plugin: 'test' },
+      }),
+    ])
+    expect(wire).toEqual([{ role: 'user', content: '[Attachment: bundle.zip (application/zip, 9 bytes)]' }])
+  })
+
+  it('still rejects image content on the text-only wire', () => {
+    expect(() => serializeMessages([
+      createUserMessage({
+        content: [
+          {
+            type: 'image',
+            attachment: {
+              attachmentId: AttachmentId('sha256:' + 'c'.repeat(64)),
+              mediaType: 'image/png',
+              bytes: 1,
+              width: 1,
+              height: 1,
+            },
+          },
+        ],
+        source: { kind: 'plugin', plugin: 'test' },
+      }),
+    ])).toThrow(/does not support image content/)
+  })
+
   it('maps user text to string content', () => {
     const wire = serializeMessages([
       createUserMessage({
