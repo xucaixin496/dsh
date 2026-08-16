@@ -6,6 +6,8 @@
  * @module @deepseek-ai/dsh-attachment/text
  */
 
+import type { PdfPageLike } from './ocr.ts'
+
 /**
  * Media-type families that are plain text and therefore safe to project into
  * model context byte-for-byte (after decoding).
@@ -153,7 +155,10 @@ async function extractPdfText(data: Uint8Array): Promise<string> {
       for (let pageNumber = 1; pageNumber <= ocrPages; pageNumber++) {
         try {
           const page = await doc.getPage(pageNumber)
-          const ocrText = (await ocrPdfPage(page)).trim()
+          // pdfjs v6 render parameters require an HTMLCanvasElement type;
+          // @napi-rs/canvas satisfies the runtime surface (width/getContext),
+          // so the bridge cast is deliberate and comment-documented.
+          const ocrText = (await ocrPdfPage(page as unknown as PdfPageLike)).trim()
           page.cleanup()
           if (ocrText !== '') ocrLines.push(`[OCR page ${pageNumber}]\n${ocrText}`)
         } catch {

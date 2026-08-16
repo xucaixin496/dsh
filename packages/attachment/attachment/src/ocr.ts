@@ -24,19 +24,30 @@ type OcrWorker = {
   terminate(): Promise<void>
 }
 
+/** Minimal pdfjs page surface the renderer needs (runtime-compatible bridge). */
+export interface PdfPageLike {
+  getViewport(params: { scale: number }): { width: number; height: number }
+  render(params: { canvasContext: unknown; canvas: unknown; viewport: unknown }): { promise: Promise<void> }
+}
+
 let workerPromise: Promise<OcrWorker> | undefined
 
 async function getOcrWorker(): Promise<OcrWorker> {
-  if (workerPromise === undefined) {
-    workerPromise = (async () => {
-      const { createWorker } = await import('tesseract.js')
-      return createWorker(OCR_LANGS, 1, {
-        langPath: tessdataDir(),
-        gzip: false,
-      })
-    })()
+  let worker: Promise<OcrWorker> | undefined = workerPromise
+  if (worker === undefined) {
+    const { createWorker } = await import('tesseract.js')
+    const created = await createWorker(OCR_LANGS, 1, {
+      langPath: tessdataDir(),
+      gzip: false,
+    })
+    const wrapped: OcrWorker = {
+      recognize: input => created.recognize(Buffer.from(input.buffer, input.byteOffset, input.byteLength)),
+      terminate: async () => { await created.terminate() },
+    }
+    worker = Promise.resolve(wrapped)
+    workerPromise = worker
   }
-  return workerPromise
+  return worker
 }
 
 /**
@@ -57,17 +68,14 @@ export async function ocrImagePng(png: Uint8Array): Promise<string> {
  * @param page - a pdfjs page object exposing getViewport and render.
  * @returns the recognized page text.
  */
-export async function ocrPdfPage(page: {
-  getViewport(params: { scale: number }): { width: number; height: number }
-  render(params: { canvasContext: unknown; viewport: unknown }): { promise: Promise<void> }
-}): Promise<string> {
+export async function ocrPdfPage(page: PdfPageLike): Promise<string> {
   const { createCanvas } = await import('@napi-rs/canvas')
   const viewport = page.getViewport({ scale: 1 })
   const scale = Math.min(MAX_RENDER_SCALE, MAX_RENDER_WIDTH / Math.max(viewport.width, 1))
   const scaled = page.getViewport({ scale })
   const canvas = createCanvas(scaled.width, scaled.height)
   const context = canvas.getContext('2d')
-  await page.render({ canvasContext: context, viewport: scaled }).promise
+  await page.render({ canvasContext: context, canvas, viewport: scaled }).promise
   const png = new Uint8Array(canvas.toBuffer('image/png'))
   return ocrImagePng(png)
 }
