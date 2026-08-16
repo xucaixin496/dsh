@@ -11,6 +11,21 @@ the first turn. Extractors: pdfjs-dist (PDF), mammoth (DOCX),
 read-excel-file (XLSX), jszip + slide XML (PPTX). Caps: 200k projected
 characters, 200 PDF pages, 2 000 XLSX rows, 100 PPTX slides. Audio/video and
 opaque binaries (archives, executables) remain metadata-only.
+
+### OCR for scanned PDFs
+
+When the PDF text layer is too sparse (`< 30` chars), the first 10 pages are
+rendered with `@napi-rs/canvas` and recognized offline with `tesseract.js`
+using bundled `eng` + `chi_sim` traineddata (no CDN at runtime). Scanned PDFs
+therefore produce readable text like ChatGPT/Claude web.
+
+## Client update flow
+
+The desktop client adds a 通用设置 page (tray → 设置…): repository URL,
+startup auto-check, 检查更新 (git fetch + `rev-list`), and 更新 (enabled only
+after a check finds commits; runs `git pull --ff-only` → `pnpm install` →
+`pnpm run build` → restarts the service). `D:\DeepSeekHarness\push-to-github.ps1`
+pushes the fork and writes the repository URL into `settings.json`.
 Scope owner: local fork of deepseek-harness (master 47f9438)
 
 ## Problem
