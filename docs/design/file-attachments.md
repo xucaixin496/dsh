@@ -2,6 +2,15 @@
 
 Status: implemented (core + web client), deployed as the local fork under
 `D:\DeepSeekHarness\fork`; installer regeneration is a follow-up.
+
+## Document extraction (ChatGPT/Claude-style fast reads)
+
+Uploaded PDF/DOCX/XLSX/PPTX are parsed server-side at admission and their
+text rides the file block projection, so the model reads the document from
+the first turn. Extractors: pdfjs-dist (PDF), mammoth (DOCX),
+read-excel-file (XLSX), jszip + slide XML (PPTX). Caps: 200k projected
+characters, 200 PDF pages, 2 000 XLSX rows, 100 PPTX slides. Audio/video and
+opaque binaries (archives, executables) remain metadata-only.
 Scope owner: local fork of deepseek-harness (master 47f9438)
 
 ## Problem

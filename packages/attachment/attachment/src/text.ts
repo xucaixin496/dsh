@@ -117,7 +117,6 @@ async function extractPdfText(data: Uint8Array): Promise<string> {
   const { getDocument } = await import('pdfjs-dist/legacy/build/pdf.mjs')
   const loadingTask = getDocument({
     data,
-    isEvalSupported: false,
     useSystemFonts: true,
   })
   const doc = await loadingTask.promise
@@ -156,6 +155,7 @@ async function extractXlsxText(data: Uint8Array): Promise<string> {
   const lines: string[] = []
   for (let rowIndex = 0; rowIndex < Math.min(rows.length, MAX_XLSX_ROWS); rowIndex++) {
     const row = rows[rowIndex]
+    if (row === undefined) continue
     lines.push(row.map(cell => (cell === null || cell === undefined ? '' : String(cell))).join('\t'))
   }
   if (rows.length > MAX_XLSX_ROWS) {
@@ -180,7 +180,7 @@ async function extractPptxText(data: Uint8Array): Promise<string> {
     if (entry === undefined) continue
     const xml = await entry.async('text')
     const texts = Array.from(xml.matchAll(/<a:t(?:\s[^>]*)?>([\s\S]*?)<\/a:t>/g))
-      .map(match => match[1]
+      .map(match => (match[1] ?? '')
         .replace(/&lt;/g, '<')
         .replace(/&gt;/g, '>')
         .replace(/&amp;/g, '&')
