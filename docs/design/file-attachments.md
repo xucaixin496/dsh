@@ -1,6 +1,7 @@
 # Native file attachments (image-equal, excluding audio/video)
 
-Status: in progress
+Status: implemented (core + web client), deployed as the local fork under
+`D:\DeepSeekHarness\fork`; installer regeneration is a follow-up.
 Scope owner: local fork of deepseek-harness (master 47f9438)
 
 ## Problem
