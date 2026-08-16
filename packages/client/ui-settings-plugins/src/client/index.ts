@@ -26,6 +26,7 @@ import { ConfigurablePluginsTab } from './ConfigurablePluginsTab.tsx'
 import type { ConfigurablePluginsTabInjected } from './ConfigurablePluginsTab.tsx'
 import { PluginsSettingsSection } from './PluginsSettingsSection.tsx'
 import type { PluginsSettingsSectionInjected, PluginsSettingsTabEntry } from './PluginsSettingsSection.tsx'
+import { StoreTab } from './StoreTab.tsx'
 import { WebSearchCard } from './WebSearchCard.tsx'
 import { AGENT_LOOP_NS, AgentLoopCardController } from './agent-loop-card-controller.ts'
 import { SHELL_NS, BashCardController } from './bash-card-controller.ts'
@@ -35,6 +36,7 @@ import { en, zh } from './locales.ts'
 export type { PluginsSettingsSectionInjected, PluginsSettingsSectionProps } from './PluginsSettingsSection.tsx'
 export type { ConfigurablePluginsTabInjected, ConfigurablePluginsTabProps } from './ConfigurablePluginsTab.tsx'
 export type { PluginCardProps } from './PluginCard.tsx'
+export type { StorePlugin, StoreTabProps } from './StoreTab.tsx'
 export type { SettingsPluginItemOwnerProps } from './slot-contract.ts'
 export type { FieldProps } from './fields.tsx'
 export type {
@@ -131,6 +133,17 @@ export function apply(ctx: ClientContext): void {
     }),
     children: { 'settings.plugin.item': { kind: 'list', scope: 'root' } },
   }, ConfigurablePluginsTab))
+
+  // The store is an ordinary tab too: it owns no card slot and renders its
+  // catalog straight from the host route, so it stays independent of which
+  // plugins are installed in this deployment.
+  ctx.slots.inject('settings.plugins.tab', () => ctx.slots.register({
+    name: 'settings.plugins.tab',
+    id: 'store',
+    order: 20,
+    label: () => t('storeTab'),
+    locale: NS,
+  }, StoreTab))
 
   ctx.slots.inject('settings.plugin.item', function* () {
     yield ctx.slots.register({

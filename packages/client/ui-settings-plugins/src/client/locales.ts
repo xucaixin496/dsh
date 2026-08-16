@@ -3,6 +3,11 @@
 /** Locale keys these surfaces render. */
 export type PluginsSettingsLocaleKey =
   | 'nav' | 'title' | 'intro' | 'tabs' | 'configurableTab' | 'empty'
+  | 'storeTab' | 'storeSearchPlaceholder' | 'storeRefresh' | 'storeLoading'
+  | 'storeUnavailable' | 'storeCount' | 'storeUpdatedAt' | 'storeEmpty'
+  | 'storeInstall' | 'storeInstalling' | 'storeInstalled' | 'storeInstalledNow'
+  | 'storeFailed' | 'storeNoDescription' | 'storeSourceNpm' | 'storeSourceGitHub'
+  | 'storeShowMore' | 'storeSecurityNote'
   | 'overridden' | 'reset' | 'readOnly' | 'expand' | 'collapse'
   | 'save' | 'saving' | 'discard' | 'unsaved' | 'saveFailed' | 'invalidNumber'
   | 'bashTitle' | 'bashDescription' | 'bashTimeoutMs' | 'bashTimeoutMsHint'
@@ -20,6 +25,24 @@ export const en: Record<PluginsSettingsLocaleKey, string> = {
   tabs: 'Plugin views',
   configurableTab: 'Plugin configuration',
   empty: 'This deployment exposes no plugin settings.',
+  storeTab: 'Plugin store',
+  storeSearchPlaceholder: 'Search plugins by name, keyword, or description…',
+  storeRefresh: 'Refresh',
+  storeLoading: 'Loading the plugin catalog…',
+  storeUnavailable: 'The plugin store is not enabled for this deployment.',
+  storeCount: '{count} plugins',
+  storeUpdatedAt: 'updated {time}',
+  storeEmpty: 'No plugins match this search.',
+  storeInstall: 'Install',
+  storeInstalling: 'Installing…',
+  storeInstalled: 'Installed',
+  storeInstalledNow: 'Installed {name}. Restart the app for it to take effect.',
+  storeFailed: 'The store did not complete this action: {reason}',
+  storeNoDescription: 'No description provided.',
+  storeSourceNpm: 'npm',
+  storeSourceGitHub: 'GitHub',
+  storeShowMore: 'Show {count} more',
+  storeSecurityNote: 'Installing runs third-party code on this machine with your own permissions. Check a plugin\'s source before installing it.',
   overridden: 'Overridden',
   reset: 'Reset to default',
   readOnly: 'This deployment stores settings read-only.',
@@ -61,6 +84,24 @@ export const zh: Record<PluginsSettingsLocaleKey, string> = {
   tabs: '插件视图',
   configurableTab: '插件配置',
   empty: '本部署没有开放任何插件设置。',
+  storeTab: '插件商店',
+  storeSearchPlaceholder: '按名称、关键词或描述搜索插件…',
+  storeRefresh: '刷新',
+  storeLoading: '正在加载插件目录…',
+  storeUnavailable: '本部署未启用插件商店。',
+  storeCount: '{count} 个插件',
+  storeUpdatedAt: '更新于 {time}',
+  storeEmpty: '没有匹配的插件。',
+  storeInstall: '安装',
+  storeInstalling: '安装中…',
+  storeInstalled: '已安装',
+  storeInstalledNow: '已安装 {name}，重启应用后生效。',
+  storeFailed: '商店未能完成此操作：{reason}',
+  storeNoDescription: '暂无描述。',
+  storeSourceNpm: 'npm',
+  storeSourceGitHub: 'GitHub',
+  storeShowMore: '显示更多 {count} 个',
+  storeSecurityNote: '安装插件会在本机以你的权限运行第三方代码，安装前请先查看插件源码。',
   overridden: '已覆盖',
   reset: '恢复默认',
   readOnly: '本部署的设置为只读。',
