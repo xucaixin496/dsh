@@ -24,7 +24,8 @@ describe('file content helpers', () => {
   })
 
   it('renders metadata plus extracted text', () => {
-    expect(fileBlockText(FILE_BLOCK)).toBe('[Attachment: notes.md (text/markdown, 11 bytes)]\nsome notes')
+    expect(fileBlockText(FILE_BLOCK))
+      .toBe(`[Attachment: notes.md (text/markdown, 11 bytes, id: sha256:${'a'.repeat(64)})]\nsome notes`)
   })
 
   it('renders only the metadata header without a text projection', () => {
@@ -37,7 +38,8 @@ describe('file content helpers', () => {
         name: 'bundle.zip',
       },
     }
-    expect(fileBlockText(block)).toBe('[Attachment: bundle.zip (application/zip, 9 bytes)]')
+    expect(fileBlockText(block))
+      .toBe(`[Attachment: bundle.zip (application/zip, 9 bytes, id: sha256:${'b'.repeat(64)})]`)
   })
 
   it('renders an unnamed fallback and empty text for non-file blocks', () => {
@@ -49,7 +51,8 @@ describe('file content helpers', () => {
         bytes: 0,
       },
     }
-    expect(fileBlockText(block)).toBe('[Attachment: (unnamed) (application/octet-stream, 0 bytes)]')
+    expect(fileBlockText(block))
+      .toBe(`[Attachment: (unnamed) (application/octet-stream, 0 bytes, id: sha256:${'c'.repeat(64)})]`)
     expect(fileBlockText({ type: 'text', text: 'x' })).toBe('')
   })
 })

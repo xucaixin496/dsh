@@ -28,6 +28,8 @@ const NODE_DIR = join(ROOT, 'node', 'node-v24.19.0-win-x64')
 const STORE_DIR = join(ROOT, 'research', '.pnpm-store')
 /** Update target for installs that never configured a repository. */
 const DEFAULT_REPO_URL = 'https://github.com/xucaixin496/dsh.git'
+/** Deploy key used to reach GitHub over SSH port 443 where HTTPS is blocked. */
+const SSH_KEY_PATH = join(ROOT, 'keys', 'github_ed25519')
 
 interface UpdaterSettings {
   RepoUrl?: string
@@ -70,6 +72,25 @@ function pnpmEnv(): Record<string, string> {
   }
 }
 
+/**
+ * Environment that routes git through the deployment's GitHub deploy key over
+ * SSH port 443. Returns nothing when no key is present, so installs without a
+ * key keep using the configured HTTPS remote as-is.
+ */
+function gitSshEnv(): Record<string, string> | undefined {
+  if (!existsSync(SSH_KEY_PATH)) return undefined
+  return {
+    GIT_SSH_COMMAND: `ssh -i "${SSH_KEY_PATH}" -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new -p 443`,
+  }
+}
+
+/** Rewrite an HTTPS GitHub URL to the SSH-over-443 host when a key exists. */
+function effectiveRemoteUrl(url: string): string {
+  if (gitSshEnv() === undefined) return url
+  const match = /^https:\/\/github\.com\/([^/]+\/[^/]+?)(?:\.git)?\/?$/.exec(url)
+  return match === null ? url : `git@ssh.github.com:${match[1] ?? ''}.git`
+}
+
 function sendJson(res: ServerResponse, status: number, body: unknown): void {
   res.writeHead(status, { 'content-type': 'application/json' })
   res.end(JSON.stringify(body))
@@ -94,15 +115,16 @@ async function checkUpdate(): Promise<Record<string, unknown>> {
   // A settings file that exists but leaves the field blank is a user's
   // explicit "no remote" choice; a missing file is an unconfigured install
   // that should track the fork's own repository by default.
-  const url = configured !== '' ? configured : existsSync(SETTINGS_PATH) ? '' : DEFAULT_REPO_URL
-  if (url === '') return { ok: false, error: '未配置更新仓库' }
-  const remote = (await run('git', ['remote', 'get-url', 'origin'])).trim()
+  const configuredUrl = configured !== '' ? configured : existsSync(SETTINGS_PATH) ? '' : DEFAULT_REPO_URL
+  if (configuredUrl === '') return { ok: false, error: '未配置更新仓库' }
+  const url = effectiveRemoteUrl(configuredUrl)
+  const remote = (await run('git', ['remote', 'get-url', 'origin'], gitSshEnv())).trim()
   if (remote === '' || remote.startsWith('fatal')) {
     await run('git', ['remote', 'add', 'origin', url])
   } else if (remote !== url) {
     await run('git', ['remote', 'set-url', 'origin', url])
   }
-  await run('git', ['fetch', '--quiet', 'origin'])
+  await run('git', ['fetch', '--quiet', 'origin'], gitSshEnv())
   let branch = (await run('git', ['rev-parse', '--abbrev-ref', 'HEAD'])).trim()
   if (branch === '' || branch.startsWith('fatal')) branch = 'main'
   const local = (await run('git', ['rev-parse', '--short', 'HEAD'])).trim()
@@ -115,7 +137,7 @@ async function checkUpdate(): Promise<Record<string, unknown>> {
 async function applyUpdate(): Promise<Record<string, unknown>> {
   let branch = (await run('git', ['rev-parse', '--abbrev-ref', 'HEAD'])).trim()
   if (branch === '' || branch.startsWith('fatal')) branch = 'main'
-  await run('git', ['pull', '--ff-only', 'origin', branch])
+  await run('git', ['pull', '--ff-only', 'origin', branch], gitSshEnv())
   const pnpm = `${NODE_DIR}\\node_modules\\pnpm\\bin\\pnpm.cjs`
   await run(pnpm, ['install', '--store-dir', STORE_DIR, '--registry', 'https://registry.npmmirror.com'], pnpmEnv())
   await run(pnpm, ['run', 'build'], pnpmEnv())
