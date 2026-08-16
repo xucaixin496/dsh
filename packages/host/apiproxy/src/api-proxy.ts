@@ -2459,7 +2459,14 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
       },
 
       async fork(request) {
-        const { sessionId, atSeq } = request.payload
+        const { sessionId, atSeq, beforeTurnSeq } = request.payload
+        if (atSeq !== undefined && beforeTurnSeq !== undefined) {
+          return err(request, {
+            code: 'invalid-request',
+            message: 'session.fork accepts either atSeq or beforeTurnSeq, not both',
+            details: {},
+          })
+        }
         let source: SessionReadState
         try {
           source = await readSessionState(sessionId)
@@ -2474,32 +2481,47 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
           })
         }
         const events = source.events
-        // An in-log anchor belongs to the turn containing it and must never
-        // clip backward to an earlier completed turn. Omitted and past-end
-        // anchors retain the last-completed-turn shortcut.
         const lastSeq = events.at(-1)?.seq ?? -1
-        const anchoredBoundary = atSeq === undefined
-          ? undefined
-          : events.find(e => e.type === 'turn/end' && e.seq >= atSeq)
-        const boundary = anchoredBoundary
-          ?? (atSeq === undefined || atSeq > lastSeq
-            ? events.findLast(e => e.type === 'turn/end')
-            : undefined)
-        if (boundary === undefined) {
-          return err(request, {
-            code: 'fork-unavailable',
-            message: atSeq !== undefined && atSeq <= lastSeq
-              ? `session "${sessionId}" has not completed the turn containing event ${String(atSeq)}`
-              : `session "${sessionId}" has no completed turn to fork from`,
-            details: { sessionId },
-          })
+        let cut: number
+        if (beforeTurnSeq !== undefined) {
+          // Exclusive cut: the child seed ends before the turn containing the
+          // anchor event, so a resend/edit re-runs that whole turn with new
+          // input. An anchor before any turn forks an empty child.
+          if (beforeTurnSeq > lastSeq) {
+            return err(request, {
+              code: 'fork-unavailable',
+              message: `session "${sessionId}" has no event at seq ${String(beforeTurnSeq)} or beyond`,
+              details: { sessionId },
+            })
+          }
+          cut = events.findLast(e => e.type === 'turn/start' && e.seq <= beforeTurnSeq)?.seq ?? 0
+        } else {
+          // An in-log anchor belongs to the turn containing it and must never
+          // clip backward to an earlier completed turn. Omitted and past-end
+          // anchors retain the last-completed-turn shortcut.
+          const anchoredBoundary = atSeq === undefined
+            ? undefined
+            : events.find(e => e.type === 'turn/end' && e.seq >= atSeq)
+          const boundary = anchoredBoundary
+            ?? (atSeq === undefined || atSeq > lastSeq
+              ? events.findLast(e => e.type === 'turn/end')
+              : undefined)
+          if (boundary === undefined) {
+            return err(request, {
+              code: 'fork-unavailable',
+              message: atSeq !== undefined && atSeq <= lastSeq
+                ? `session "${sessionId}" has not completed the turn containing event ${String(atSeq)}`
+                : `session "${sessionId}" has no completed turn to fork from`,
+              details: { sessionId },
+            })
+          }
+          // Extend the cut through trailing out-of-band appends (session/title,
+          // injections) up to the next turn/start: they are standalone events,
+          // so the seed stays balanced, and the child inherits a title
+          // generated right after the boundary turn.
+          cut = boundary.seq + 1
+          while (cut < events.length && events[cut]?.type !== 'turn/start') cut++
         }
-        // Extend the cut through trailing out-of-band appends (session/title,
-        // injections) up to the next turn/start: they are standalone events, so
-        // the seed stays balanced, and the child inherits a title generated
-        // right after the boundary turn.
-        let cut = boundary.seq + 1
-        while (cut < events.length && events[cut]?.type !== 'turn/start') cut++
         let workspace: Workspace | undefined
         try {
           workspace = await forkWorkspace(source)

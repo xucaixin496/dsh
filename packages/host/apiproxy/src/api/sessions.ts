@@ -342,8 +342,14 @@ export interface SessionsApi {
    * without acquiring an Agent. Workspace attachment follows the source
    * directly, or the nearest workspace-owning ancestor when the source is a
    * subagent.
+   *
+   * `beforeTurnSeq` instead cuts EXCLUSIVELY: the child seed ends before the
+   * turn containing that anchor event (the anchor's own turn is dropped so a
+   * resend/edit can re-run it with new input). An anchor before any turn
+   * forks an empty child; an anchor past the log end fails with
+   * `fork-unavailable`. `atSeq` and `beforeTurnSeq` are mutually exclusive.
    */
-  fork(request: RpcRequest<{ sessionId: SessionId; atSeq?: number }>):
+  fork(request: RpcRequest<{ sessionId: SessionId; atSeq?: number; beforeTurnSeq?: number }>):
   Promise<RpcResponse<{ sessionId: SessionId }>>
 
   /**

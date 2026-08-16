@@ -371,6 +371,14 @@ export interface ChatNodeOwnerProps {
   openFile: (path: string) => void
   inspectCall: (callId: CallId) => void
   forkAt: (seq: number) => void
+  /**
+   * Re-run a user message from its turn's start: fork a child session that
+   * ends before the turn containing `seq`, open it, and send `text` there.
+   * Resolves when the edited/resend prompt has been admitted. Resolves
+   * `false` when the fork failed (the source view stays untouched), so an
+   * in-bubble editor can keep its draft for a retry.
+   */
+  resendAt: (seq: number, text: string) => Promise<boolean>
   /** Resolve a session-authorized historical image for inline display. */
   loadImage: (attachment: ImageAttachmentRef) => Promise<string>
   /** Resolve a session-authorized historical file for download. */
@@ -712,6 +720,13 @@ export interface ChatViewInjected {
   }
   /** Fork through the completed turn ending at the eligible message `seq`, then open the child. */
   forkAt: (seq: number) => void
+  /**
+   * Fork a child session that ends before the turn containing the user
+   * message `seq`, open it, and resend `text` there (edit-and-resend /
+   * regenerate path). Resolves `false` when the fork failed, keeping the
+   * source view untouched.
+   */
+  resendAt: (seq: number, text: string) => Promise<boolean>
   /**
    * Prose file-mention vocabulary for one closing message, from the optional
    * {@link ChatFileMentions} service (resolved lazily per call, so composing

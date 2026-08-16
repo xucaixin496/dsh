@@ -3,7 +3,7 @@
 // assistant answers), pending steering (copy only), context injection,
 // compaction marker, retry disclosure, and unknown-surface JSON rows.
 
-import { memo, useEffect, useMemo, useState } from 'react'
+import { memo, useCallback, useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import type {
   ModelRetryNode, TurnErrorNode, UserMessageNode,
@@ -15,6 +15,7 @@ import { messageFileLabels, messageImageLabels } from '../image-labels.ts'
 import { CompactionItem } from './CompactionItem.tsx'
 import { ContextInjectionRow } from './ContextInjectionRow.tsx'
 import { MessageIconActions } from './MessageIconActions.tsx'
+import { IconCloseOutline16, IconLoadingOutline16, IconSendOutline16 } from '@deepseek-ai/dsh-client-ui-primitives'
 import css from './MessageItem.module.css'
 
 type UserImage = Extract<UserMessageNode['content'][number], { type: 'image' }>
@@ -183,15 +184,25 @@ function projectUserText(text: string): ReactNode {
 
 /** Right-aligned bubble shared by user and steering rows. */
 function UserStyleBubble({
-  content, imageLoader, fileLoader, actions, pending = false, t,
+  content, imageLoader, fileLoader, actions, pending = false, editing = false, editValue = '',
+  onEditChange, onCancelEdit, onSendEdit, sendingEdit = false, t,
 }: {
   content: readonly unknown[]
   imageLoader: ImageLoader
   fileLoader: (attachment: UserFile['attachment']) => Promise<{ data: Uint8Array; name?: string; mediaType: string }>
   /** Optional IconActions (or similar) below the bubble; receives the joined text. */
-  actions?: (text: string) => ReactNode
+  actions?: ((text: string) => ReactNode) | undefined
   /** Whether this is the Host-authoritative pre-admission steering projection. */
   pending?: boolean
+  /** In-bubble edit mode: the text becomes a textarea plus a send/cancel footer. */
+  editing?: boolean
+  /** Current edit draft value while `editing`. */
+  editValue?: string
+  onEditChange?: (value: string) => void
+  onCancelEdit?: () => void
+  onSendEdit?: () => void
+  /** An edit resend is in flight; the footer's send control disables while true. */
+  sendingEdit?: boolean
   t: ChatViewSlotProps['t']
 }): ReactNode {
   const { text, images, files, rest } = contentParts(content)
@@ -236,12 +247,59 @@ function UserStyleBubble({
             ))}
           </div>
         )}
-        {showBubble && <div className={css.bubble}>
-          {projectUserText(text)}
-          {rest.map((block, i) => <JsonBlock key={i} label={t('message.extraBlock')} payload={block} truncatedLabel={truncated} />)}
-        </div>}
+        {showBubble && !editing && (
+          <div className={css.bubble}>
+            {projectUserText(text)}
+            {rest.map((block, i) => <JsonBlock key={i} label={t('message.extraBlock')} payload={block} truncatedLabel={truncated} />)}
+          </div>
+        )}
+        {editing && (
+          <div className={`${css.bubble} ${css.bubbleEditing}`}>
+            <textarea
+              className={css.editInput}
+              value={editValue}
+              onChange={event => onEditChange?.(event.target.value)}
+              placeholder={t('message.edit.placeholder')}
+              aria-label={t('message.edit.placeholder')}
+              autoFocus
+              onKeyDown={event => {
+                if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
+                  event.preventDefault()
+                  onSendEdit?.()
+                } else if (event.key === 'Escape') {
+                  event.preventDefault()
+                  onCancelEdit?.()
+                }
+              }}
+            />
+            <div className={css.editFooter}>
+              {(images.length > 0 || files.length > 0) && (
+                <span className={css.editHint}>{t('message.edit.attachmentsHint')}</span>
+              )}
+              <span className={css.editShortcut}>{t('message.edit.hint')}</span>
+              <span className={css.editSpacer} />
+              <button
+                type="button"
+                className={css.editCancel}
+                onClick={onCancelEdit}
+              >
+                <IconCloseOutline16 />
+                {t('message.edit.cancel')}
+              </button>
+              <button
+                type="button"
+                className={css.editSend}
+                aria-label={t('message.edit.send')}
+                disabled={editValue.trim() === '' || sendingEdit}
+                onClick={onSendEdit}
+              >
+                {sendingEdit ? <IconLoadingOutline16 /> : <IconSendOutline16 />}
+              </button>
+            </div>
+          </div>
+        )}
       </div>
-      {actions?.(text)}
+      {!editing && actions?.(text)}
     </div>
   )
 }
@@ -280,24 +338,62 @@ export function PendingSteeringBubble({ content, loadImage, loadFile, t }: {
 
 /** User and admitted-steering keyed Chat renderer. */
 export const UserMessageNodeView = memo(function UserMessageNodeView({
-  node, loadImage, loadFile, t,
+  node, loadImage, loadFile, resendAt, t,
 }: ChatNodeViewProps<'user' | 'steering'>) {
   const data = node.data
+  const { text } = contentParts(data.content)
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState('')
+  const [sending, setSending] = useState(false)
+  const startEdit = useCallback(() => {
+    setDraft(text)
+    setEditing(true)
+  }, [text])
+  const cancelEdit = useCallback(() => {
+    setEditing(false)
+    setDraft('')
+  }, [])
+  const submitEdit = useCallback(async () => {
+    const next = draft.trim()
+    if (next === '' || sending) return
+    setSending(true)
+    try {
+      const forked = await resendAt(node.data.seq, next)
+      if (forked) setEditing(false)
+    } finally {
+      setSending(false)
+    }
+  }, [draft, sending, resendAt, node.data.seq])
+  const resend = useCallback(() => {
+    if (sending || text.trim() === '') return
+    setSending(true)
+    void resendAt(node.data.seq, text).finally(() => setSending(false))
+  }, [sending, text, resendAt, node.data.seq])
+  const canEdit = text.trim() !== ''
   return (
     <UserStyleBubble
       content={data.content}
       imageLoader={loadImage}
       fileLoader={loadFile}
       t={t}
-      actions={text => (
+      editing={editing}
+      editValue={draft}
+      onEditChange={setDraft}
+      onCancelEdit={cancelEdit}
+      onSendEdit={submitEdit}
+      sendingEdit={sending}
+      actions={!editing ? (bubbleText) => (
         <MessageIconActions
-          text={text}
+          text={bubbleText}
           time={data.time}
           clock="start"
           className={css.actions}
           t={t}
+          onEdit={canEdit ? startEdit : undefined}
+          onResend={canEdit ? resend : undefined}
+          resendBusy={sending}
         />
-      )}
+      ) : undefined}
     />
   )
 })

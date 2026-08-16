@@ -422,6 +422,27 @@ export function apply(ctx: Context): void {
               // Fork or child-rename failure keeps the source view untouched.
             })
         },
+        resendAt: async (seq, text) => {
+          try {
+            const childId = await sessions.fork({ sessionId, beforeTurnSeq: seq, increaseTitle: true })
+            // Admit the edited/resent text before switching, so the branch
+            // opens with the message already queued. A rejected prompt still
+            // opens the branch and surfaces through the child's promptError.
+            const child = sessions.binding(childId)?.session
+            if (child !== undefined) {
+              const admitted = await child.prompt([{ type: 'text', text }], 'queue')
+              if (!admitted.ok) {
+                console.error(`resend prompt rejected: ${admitted.error.code}: ${admitted.error.message}`)
+              }
+            }
+            sessions.open(childId)
+            return true
+          } catch (error) {
+            // Fork or child-rename failure keeps the source view untouched.
+            console.error('resend failed', error)
+            return false
+          }
+        },
       }
     },
   }, ChatView)

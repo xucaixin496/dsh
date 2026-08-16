@@ -253,6 +253,61 @@ describe('sessions.fork', () => {
     await ctx.fiber.dispose()
   })
 
+  it('cuts exclusively before the turn containing a beforeTurnSeq anchor', async () => {
+    const ctx = await composed()
+    const source = liveAgent(ctx, 'session-exclusive', 3)
+    // Turn 2's user/message event (turn 1 is fully complete before it).
+    const userSeqs = source.events.filter(event => event.type === 'user/message').map(event => event.seq)
+    const anchor = userSeqs[1]
+    expect(anchor).toBeDefined()
+    if (anchor === undefined) return
+    const response = await api(ctx).sessions.fork(request({ sessionId: source.id, beforeTurnSeq: anchor }))
+    expect(response.result.ok).toBe(true)
+    if (!response.result.ok) return
+    expect(ctx.sessions.get(response.result.value.sessionId)?.events.map(event => event.type)).toEqual([
+      'turn/start', 'user/message', 'turn/end', 'session/end-seed',
+    ])
+    await ctx.fiber.dispose()
+  })
+
+  it('forks an empty child for an anchor in the first turn', async () => {
+    const ctx = await composed()
+    const source = liveAgent(ctx, 'session-first-exclusive', 2)
+    const userSeqs = source.events.filter(event => event.type === 'user/message').map(event => event.seq)
+    const anchor = userSeqs[0]
+    expect(anchor).toBeDefined()
+    if (anchor === undefined) return
+    const response = await api(ctx).sessions.fork(request({ sessionId: source.id, beforeTurnSeq: anchor }))
+    expect(response.result.ok).toBe(true)
+    if (!response.result.ok) return
+    const child = ctx.sessions.get(response.result.value.sessionId)
+    expect(child?.events.some(event => event.type === 'turn/start')).toBe(false)
+    expect(child?.events.map(event => event.type)).toEqual(['session/end-seed'])
+    await ctx.fiber.dispose()
+  })
+
+  it('rejects a beforeTurnSeq anchor past the log end', async () => {
+    const ctx = await composed()
+    const source = liveAgent(ctx, 'session-exclusive-past', 1)
+    const response = await api(ctx).sessions.fork(request({ sessionId: source.id, beforeTurnSeq: 999 }))
+    expect(response.result).toMatchObject({
+      ok: false,
+      error: { code: 'fork-unavailable', details: { sessionId: source.id } },
+    })
+    await ctx.fiber.dispose()
+  })
+
+  it('rejects combining atSeq and beforeTurnSeq', async () => {
+    const ctx = await composed()
+    const source = liveAgent(ctx, 'session-both-anchors', 1)
+    const response = await api(ctx).sessions.fork(request({ sessionId: source.id, atSeq: 1, beforeTurnSeq: 1 }))
+    expect(response.result).toMatchObject({
+      ok: false,
+      error: { code: 'invalid-request' },
+    })
+    await ctx.fiber.dispose()
+  })
+
   it('installs the latest logged model selection before the child can run', async () => {
     const ctx = await composed()
     const source = liveAgent(ctx, 'session-routed', 1)

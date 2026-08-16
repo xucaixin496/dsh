@@ -293,6 +293,7 @@ function panelProps(data: WorkflowRunChatData, sessions = listState(), openSessi
     openFile: () => {},
     inspectCall: () => {},
     forkAt: () => {},
+    resendAt: () => Promise.resolve(true),
     loadImage: () => Promise.reject(new Error('unused')),
     loadFile: async () => ({ data: new Uint8Array(), mediaType: 'application/octet-stream' }),
     fileMentions: () => undefined,

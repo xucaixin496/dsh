@@ -3,7 +3,8 @@
 
 import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from 'react'
 import {
-  IconBranchOutline16, IconCheckOutline16, IconCopyOutline16, Tooltip, writeClipboard,
+  IconBranchOutline16, IconCheckOutline16, IconCopyOutline16, IconEditOutline16, IconLoadingOutline16,
+  IconRefreshOutline16, Tooltip, writeClipboard,
 } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { ChatViewSlotProps } from '../contract/slots.ts'
 import { formatLatencySeconds, formatMessageClock, formatRunDuration, formatTokensPerSecond } from './message-chrome.ts'
@@ -27,6 +28,12 @@ export interface MessageIconActionsProps {
   onBranch?: (() => void) | undefined
   /** The message is not a completed transcript tail, so branch stays visible but unavailable. */
   branchUnavailable?: boolean | undefined
+  /** Enter in-bubble edit mode for this message; omission hides the edit action. */
+  onEdit?: (() => void) | undefined
+  /** Re-run this message's turn with its current text; omission hides the resend action. */
+  onResend?: (() => void) | undefined
+  /** A resend/edit is in flight; the resend action disables while true. */
+  resendBusy?: boolean | undefined
   /** Parent layout class composed onto the actions row. */
   className?: string | undefined
   /**
@@ -44,8 +51,8 @@ export interface MessageIconActionsProps {
  * @returns The actions row element.
  */
 export function MessageIconActions({
-  text, time, runMs, ttftMs, tokensPerSecond, clock, onBranch, branchUnavailable = false, className,
-  extraActions, t,
+  text, time, runMs, ttftMs, tokensPerSecond, clock, onBranch, branchUnavailable = false, onEdit, onResend,
+  resendBusy = false, className, extraActions, t,
 }: MessageIconActionsProps) {
   const day = useCalendarDay()
   const reasonId = useId()
@@ -116,6 +123,27 @@ export function MessageIconActions({
         </button>
       </Tooltip>
       {extraActions}
+      {onEdit !== undefined && (
+        <Tooltip label={t('message.edit')} side="bottom">
+          <button type="button" className={css.action} aria-label={t('message.edit')} onClick={onEdit}>
+            <IconEditOutline16 />
+          </button>
+        </Tooltip>
+      )}
+      {onResend !== undefined && (
+        <Tooltip label={t('message.resend')} side="bottom">
+          <button
+            type="button"
+            className={css.action}
+            aria-label={t('message.resend')}
+            aria-disabled={resendBusy || undefined}
+            data-unavailable={resendBusy || undefined}
+            onClick={resendBusy ? undefined : onResend}
+          >
+            {resendBusy ? <IconLoadingOutline16 /> : <IconRefreshOutline16 />}
+          </button>
+        </Tooltip>
+      )}
       {onBranch !== undefined && (
         <Tooltip label={branchUnavailable ? t('message.branchUnavailable') : t('message.branch')} side="bottom">
           {/* Native disabled buttons do not deliver the hover/focus events Tooltip needs. */}
