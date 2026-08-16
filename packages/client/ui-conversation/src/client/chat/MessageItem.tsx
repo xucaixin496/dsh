@@ -10,22 +10,25 @@ import type {
 } from '@deepseek-ai/dsh-client-runtime/client'
 import { JsonBlock, MessageText, StateDot } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { ChatNodeViewProps, ChatViewSlotProps } from '../contract/slots.ts'
-import { ImageGallery, type ImageLoader } from '@deepseek-ai/dsh-client-ui-attachment'
-import { messageImageLabels } from '../image-labels.ts'
+import { FileChip, ImageGallery, type ImageLoader } from '@deepseek-ai/dsh-client-ui-attachment'
+import { messageFileLabels, messageImageLabels } from '../image-labels.ts'
 import { CompactionItem } from './CompactionItem.tsx'
 import { ContextInjectionRow } from './ContextInjectionRow.tsx'
 import { MessageIconActions } from './MessageIconActions.tsx'
 import css from './MessageItem.module.css'
 
 type UserImage = Extract<UserMessageNode['content'][number], { type: 'image' }>
+type UserFile = Extract<UserMessageNode['content'][number], { type: 'file' }>
 
 function contentParts(content: readonly unknown[]): {
   text: string
   images: { attachment: UserImage['attachment'] }[]
+  files: { attachment: UserFile['attachment'] }[]
   rest: unknown[]
 } {
   const texts: string[] = []
   const images: { attachment: UserImage['attachment'] }[] = []
+  const files: { attachment: UserFile['attachment'] }[] = []
   const rest: unknown[] = []
   for (const block of content) {
     const b = block as { type?: string; text?: string; attachment?: unknown }
@@ -33,9 +36,12 @@ function contentParts(content: readonly unknown[]): {
     else if (b.type === 'image' && b.attachment !== undefined) {
       images.push({ attachment: (b as UserImage).attachment })
     }
+    else if (b.type === 'file' && b.attachment !== undefined) {
+      files.push({ attachment: (b as UserFile).attachment })
+    }
     else rest.push(block)
   }
-  return { text: texts.join(''), images, rest }
+  return { text: texts.join(''), images, files, rest }
 }
 
 function retrySeconds(milliseconds: number): number {
@@ -177,23 +183,59 @@ function projectUserText(text: string): ReactNode {
 
 /** Right-aligned bubble shared by user and steering rows. */
 function UserStyleBubble({
-  content, imageLoader, actions, pending = false, t,
+  content, imageLoader, fileLoader, actions, pending = false, t,
 }: {
   content: readonly unknown[]
   imageLoader: ImageLoader
+  fileLoader: (attachment: UserFile['attachment']) => Promise<{ data: Uint8Array; name?: string; mediaType: string }>
   /** Optional IconActions (or similar) below the bubble; receives the joined text. */
   actions?: (text: string) => ReactNode
   /** Whether this is the Host-authoritative pre-admission steering projection. */
   pending?: boolean
   t: ChatViewSlotProps['t']
 }): ReactNode {
-  const { text, images, rest } = contentParts(content)
+  const { text, images, files, rest } = contentParts(content)
   const truncated = (total: number): string => t('json.truncated', { total })
   const showBubble = text !== '' || rest.length > 0
+  const downloadFile = (attachment: UserFile['attachment']): void => {
+    void fileLoader(attachment)
+      .then((loaded) => {
+        const buffer = new ArrayBuffer(loaded.data.byteLength)
+        new Uint8Array(buffer).set(loaded.data)
+        const blob = new Blob([buffer], { type: loaded.mediaType })
+        const url = URL.createObjectURL(blob)
+        const anchor = document.createElement('a')
+        anchor.href = url
+        anchor.download = loaded.name ?? attachment.name ?? 'attachment'
+        anchor.click()
+        setTimeout(() => URL.revokeObjectURL(url), 0)
+      })
+      .catch((error: unknown) => {
+        // A failed download is reported by the owner surface's error path;
+        // the chip stays interactive for a retry.
+        console.error('download file attachment failed', error)
+      })
+  }
   return (
     <div className={css.userRow} data-pending-steering={pending || undefined} data-time-hover-root>
       <div className={css.userStack}>
         <ImageGallery images={images} load={imageLoader} align="end" labels={messageImageLabels(t)} />
+        {files.length > 0 && (
+          <div className={css.fileList}>
+            {files.map((file, index) => (
+              <FileChip
+                key={String(file.attachment.attachmentId) + index}
+                value={{
+                  name: file.attachment.name ?? t('file.unnamed'),
+                  bytes: file.attachment.bytes,
+                  mediaType: file.attachment.mediaType,
+                }}
+                labels={messageFileLabels(t)}
+                onDownload={() => { downloadFile(file.attachment) }}
+              />
+            ))}
+          </div>
+        )}
         {showBubble && <div className={css.bubble}>
           {projectUserText(text)}
           {rest.map((block, i) => <JsonBlock key={i} label={t('message.extraBlock')} payload={block} truncatedLabel={truncated} />)}
@@ -210,9 +252,10 @@ function UserStyleBubble({
  * @param props - Pending message content and conversation translator.
  * @returns the pending steering bubble.
  */
-export function PendingSteeringBubble({ content, loadImage, t }: {
+export function PendingSteeringBubble({ content, loadImage, loadFile, t }: {
   content: readonly unknown[]
   loadImage?: ImageLoader
+  loadFile: (attachment: UserFile['attachment']) => Promise<{ data: Uint8Array; name?: string; mediaType: string }>
   t: ChatViewSlotProps['t']
 }): ReactNode {
   const imageLoader = loadImage ?? (() => Promise.reject(new Error(t('image.serviceUnavailable'))))
@@ -220,6 +263,7 @@ export function PendingSteeringBubble({ content, loadImage, t }: {
     <UserStyleBubble
       content={content}
       imageLoader={imageLoader}
+      fileLoader={loadFile}
       pending
       t={t}
       actions={text => (
@@ -236,13 +280,14 @@ export function PendingSteeringBubble({ content, loadImage, t }: {
 
 /** User and admitted-steering keyed Chat renderer. */
 export const UserMessageNodeView = memo(function UserMessageNodeView({
-  node, loadImage, t,
+  node, loadImage, loadFile, t,
 }: ChatNodeViewProps<'user' | 'steering'>) {
   const data = node.data
   return (
     <UserStyleBubble
       content={data.content}
       imageLoader={loadImage}
+      fileLoader={loadFile}
       t={t}
       actions={text => (
         <MessageIconActions
