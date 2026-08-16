@@ -21,6 +21,12 @@
   },
   "files": ["lib/index.js", "lib/invariant.js", "lib/types/**/*.d.ts"],
   "license": "MIT",
+  "dependencies": {
+    "jszip": "^3.10.1",
+    "mammoth": "^1.12.1",
+    "pdfjs-dist": "^6.2.108",
+    "read-excel-file": "^9.3.10"
+  },
   "peerDependencies": {
     "@deepseek-ai/dsh-brand": "workspace:^",
     "@deepseek-ai/dsh-invariants": "workspace:^",

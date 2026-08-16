@@ -212,7 +212,7 @@ async function durablePromptContent(ctx: Context, content: readonly PromptConten
       mediaType: item.part.mediaType,
       ...item.part.name === undefined ? {} : { name: item.part.name },
     })
-    const text = extractFileText(item.data, item.part.mediaType, item.part.name)
+    const text = await extractFileText(item.data, item.part.mediaType, item.part.name)
     blocks.push({ type: 'file', attachment, ...(text === undefined ? {} : { text }) })
   }
   return blocks

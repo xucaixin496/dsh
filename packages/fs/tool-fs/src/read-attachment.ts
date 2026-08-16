@@ -123,7 +123,7 @@ export function applyReadAttachmentTool(ctx: Context): void {
         throw new Error(`attachment "${id}" is not referenced by this session or is an image; images are rendered directly when the model supports them`)
       }
       const stored = await attachments.readFile(ref, exec.signal)
-      const text = extractFileText(stored.data, stored.ref.mediaType, stored.ref.name)
+      const text = await extractFileText(stored.data, stored.ref.mediaType, stored.ref.name)
       return {
         attachmentId: String(ref.attachmentId),
         mediaType: ref.mediaType,
