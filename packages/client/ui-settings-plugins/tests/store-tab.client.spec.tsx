@@ -140,4 +140,16 @@ describe('StoreTab', () => {
 
     expect(await screen.findByText(en.storeFailed.replace('{reason}', 'offline'))).toBeTruthy()
   })
+
+  it('shows a plain-text server answer instead of a JSON parse crash', async () => {
+    vi.stubGlobal('fetch', vi.fn(() => Promise.resolve(new Response(
+      'content type must be application/json',
+      { status: 415, headers: { 'content-type': 'text/plain' } },
+    ))))
+    renderStore()
+
+    expect(await screen.findByText(
+      en.storeFailed.replace('{reason}', 'content type must be application/json'),
+    )).toBeTruthy()
+  })
 })

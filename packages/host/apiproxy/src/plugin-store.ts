@@ -407,9 +407,9 @@ async function installFromCatalog(spec: string): Promise<{ name: string; restart
   return { name: plugin.name, restart: true }
 }
 
-/** Register the store routes; a no-op when the desktop deployment file is absent. */
+/** Register the store routes; a no-op when the fork checkout is absent. */
 export function registerPluginStoreRoutes(webServer: { register(route: PluginStoreRouteSpec): unknown }): void {
-  if (!existsSync(SETTINGS_PATH)) return
+  if (!existsSync(SETTINGS_PATH) && !existsSync(CLI_JS)) return
   webServer.register({
     kind: 'prefix',
     path: '/api/store',

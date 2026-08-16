@@ -20,6 +20,29 @@ interface ApplyResult {
   error?: string
 }
 
+/** Parse a store-style response, surfacing non-JSON bodies as readable errors. */
+async function readJson(response: Response): Promise<Record<string, unknown>> {
+  const text = await response.text()
+  try {
+    const parsed = JSON.parse(text) as Record<string, unknown>
+    if (!response.ok) {
+      throw new Error(typeof parsed.error === 'string' ? parsed.error : `HTTP ${String(response.status)}`)
+    }
+    return parsed
+  } catch (error) {
+    if (error instanceof SyntaxError) {
+      const message = text.trim().slice(0, 200)
+      throw new Error(message === '' ? `HTTP ${String(response.status)}` : message)
+    }
+    throw error
+  }
+}
+
+/** Human-readable failure text without the JS "Error:" prefix. */
+function errorText(reason: unknown): string {
+  return reason instanceof Error ? reason.message : String(reason)
+}
+
 /** Full component props: the standard settings-locale seat. */
 export type UpdaterItemProps = PropsLocale<'settings'>
 
@@ -41,7 +64,7 @@ export function UpdaterItem({ t }: UpdaterItemProps) {
     setAvailable(false)
     setStatus(t('updater.checking'))
     try {
-      const response = (await (await fetch('/api/updater/check', { method: 'POST' })).json()) as CheckResult
+      const response = await readJson(await fetch('/api/updater/check', { method: 'POST' })) as CheckResult
       if (response.repo !== undefined) setRepo(response.repo)
       if (response.ok !== true) {
         setStatus(t('updater.failed', { reason: response.error ?? 'unknown' }))
@@ -52,7 +75,7 @@ export function UpdaterItem({ t }: UpdaterItemProps) {
         ? t('updater.available', { count: response.count ?? 0, local: response.local ?? '', remote: response.remote ?? '' })
         : t('updater.latest', { hash: response.local ?? '' }))
     } catch (error) {
-      setStatus(t('updater.failed', { reason: String(error) }))
+      setStatus(t('updater.failed', { reason: errorText(error) }))
     } finally {
       setBusy(false)
     }
@@ -63,10 +86,10 @@ export function UpdaterItem({ t }: UpdaterItemProps) {
     setAvailable(false)
     setStatus(t('updater.applying'))
     try {
-      const response = (await (await fetch('/api/updater/apply', { method: 'POST' })).json()) as ApplyResult
+      const response = await readJson(await fetch('/api/updater/apply', { method: 'POST' })) as ApplyResult
       setStatus(response.ok === true ? t('updater.applyDone') : t('updater.failed', { reason: response.error ?? 'unknown' }))
     } catch (error) {
-      setStatus(t('updater.failed', { reason: String(error) }))
+      setStatus(t('updater.failed', { reason: errorText(error) }))
     } finally {
       setBusy(false)
     }

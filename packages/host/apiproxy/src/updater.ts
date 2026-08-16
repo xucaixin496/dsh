@@ -1,9 +1,12 @@
 /**
  * Git-based self-update routes for the desktop fork: check origin for new
- * commits and apply them (pull + install + build). Registered only when the
- * desktop deployment's settings file exists, so stock installs are
- * unaffected. All commands run inside the fork repository with the D-drive
- * Node toolchain. The client restarts the app after a successful apply.
+ * commits and apply them (pull + install + build). Registered when the fork
+ * checkout is present (the desktop deployment marker); a missing settings
+ * file falls back to the fork's default repository so a fresh install works
+ * before the user ever opens the settings dialog. Stock installs, which have
+ * no fork checkout, are unaffected. All commands run inside the fork
+ * repository with the D-drive Node toolchain. The client restarts the app
+ * after a successful apply.
  * @module dsh-apiproxy/updater
  */
 
@@ -19,8 +22,12 @@ const SETTINGS_PATH = 'D:\\DeepSeekHarness\\settings.json'
 /** Deployment root derived from the settings file location (installer-relative). */
 const ROOT = dirname(SETTINGS_PATH)
 const REPO_DIR = join(ROOT, 'fork')
+/** The fork's built CLI entry — presence marks this as a desktop deployment. */
+const CLI_JS = join(REPO_DIR, 'apps', 'cli', 'lib', 'bin.js')
 const NODE_DIR = join(ROOT, 'node', 'node-v24.19.0-win-x64')
 const STORE_DIR = join(ROOT, 'research', '.pnpm-store')
+/** Update target for installs that never configured a repository. */
+const DEFAULT_REPO_URL = 'https://github.com/xucaixin496/dsh.git'
 
 interface UpdaterSettings {
   RepoUrl?: string
@@ -83,7 +90,11 @@ function trusted(req: IncomingMessage): boolean {
 
 async function checkUpdate(): Promise<Record<string, unknown>> {
   const settings = readSettings()
-  const url = (settings.RepoUrl ?? '').trim()
+  const configured = (settings.RepoUrl ?? '').trim()
+  // A settings file that exists but leaves the field blank is a user's
+  // explicit "no remote" choice; a missing file is an unconfigured install
+  // that should track the fork's own repository by default.
+  const url = configured !== '' ? configured : existsSync(SETTINGS_PATH) ? '' : DEFAULT_REPO_URL
   if (url === '') return { ok: false, error: '未配置更新仓库' }
   const remote = (await run('git', ['remote', 'get-url', 'origin'])).trim()
   if (remote === '' || remote.startsWith('fatal')) {
@@ -118,9 +129,9 @@ export interface UpdaterRouteSpec {
   handler: (req: IncomingMessage, res: ServerResponse) => Promise<void> | void
 }
 
-/** Register the updater routes; a no-op when the desktop deployment file is absent. */
+/** Register the updater routes; a no-op when the fork checkout is absent. */
 export function registerUpdaterRoutes(webServer: { register(route: UpdaterRouteSpec): unknown }): void {
-  if (!existsSync(SETTINGS_PATH)) return
+  if (!existsSync(SETTINGS_PATH) && !existsSync(CLI_JS)) return
   webServer.register({
     kind: 'prefix',
     path: '/api/updater',

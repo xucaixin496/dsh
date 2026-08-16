@@ -40,6 +40,29 @@ interface StoreInstallResult {
   error?: string
 }
 
+/** Parse a store response, surfacing non-JSON bodies as readable errors. */
+async function readJson(response: Response): Promise<Record<string, unknown>> {
+  const text = await response.text()
+  try {
+    const parsed = JSON.parse(text) as Record<string, unknown>
+    if (!response.ok) {
+      throw new Error(typeof parsed.error === 'string' ? parsed.error : `HTTP ${String(response.status)}`)
+    }
+    return parsed
+  } catch (error) {
+    if (error instanceof SyntaxError) {
+      const message = text.trim().slice(0, 200)
+      throw new Error(message === '' ? `HTTP ${String(response.status)}` : message)
+    }
+    throw error
+  }
+}
+
+/** Human-readable failure text without the JS "Error:" prefix. */
+function errorText(reason: unknown): string {
+  return reason instanceof Error ? reason.message : String(reason)
+}
+
 /** Full component props: the standard plugins-locale seat. */
 export type StoreTabProps = PropsLocale<'settings.plugins'>
 
@@ -89,11 +112,11 @@ export function StoreTab({ t }: StoreTabProps) {
     setError('')
     setNotice('')
     try {
-      const response = (await (await fetch(`/api/store/list${force ? '?force=1' : ''}`, {
+      const response = await readJson(await fetch(`/api/store/list${force ? '?force=1' : ''}`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: force ? JSON.stringify({ force: true }) : '{}',
-      })).json()) as StoreListResult
+      })) as StoreListResult
       if (response.ok !== true) {
         setError(t('storeFailed', { reason: response.error ?? 'unknown' }))
         return
@@ -102,7 +125,7 @@ export function StoreTab({ t }: StoreTabProps) {
       setInstalled(new Set(response.installed ?? []))
       setFetchedAt(response.fetchedAt ?? '')
     } catch (reason) {
-      setError(t('storeFailed', { reason: String(reason) }))
+      setError(t('storeFailed', { reason: errorText(reason) }))
     } finally {
       setBusy(false)
     }
@@ -122,11 +145,11 @@ export function StoreTab({ t }: StoreTabProps) {
     setError('')
     setNotice('')
     try {
-      const response = (await (await fetch('/api/store/install', {
+      const response = await readJson(await fetch('/api/store/install', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ spec: plugin.spec }),
-      })).json()) as StoreInstallResult
+      })) as StoreInstallResult
       if (response.ok !== true) {
         setError(t('storeFailed', { reason: response.error ?? 'unknown' }))
         return
@@ -135,7 +158,7 @@ export function StoreTab({ t }: StoreTabProps) {
       setInstalled(previous => new Set([...previous, name]))
       setNotice(t('storeInstalledNow', { name }))
     } catch (reason) {
-      setError(t('storeFailed', { reason: String(reason) }))
+      setError(t('storeFailed', { reason: errorText(reason) }))
     } finally {
       setInstalling(null)
     }
