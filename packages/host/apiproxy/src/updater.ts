@@ -9,15 +9,18 @@
 
 import { execFile } from 'node:child_process'
 import { existsSync, readFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
 import { promisify } from 'node:util'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 
 const execFileAsync = promisify(execFile)
 
 const SETTINGS_PATH = 'D:\\DeepSeekHarness\\settings.json'
-const REPO_DIR = 'D:\\DeepSeekHarness\\research\\deepseek-ai-deepseek-harness-47f9438'
-const NODE_DIR = 'D:\\DeepSeekHarness\\node\\node-v24.19.0-win-x64'
-const STORE_DIR = 'D:\\DeepSeekHarness\\research\\.pnpm-store'
+/** Deployment root derived from the settings file location (installer-relative). */
+const ROOT = dirname(SETTINGS_PATH)
+const REPO_DIR = join(ROOT, 'fork')
+const NODE_DIR = join(ROOT, 'node', 'node-v24.19.0-win-x64')
+const STORE_DIR = join(ROOT, 'research', '.pnpm-store')
 
 interface UpdaterSettings {
   RepoUrl?: string
@@ -51,11 +54,11 @@ function pnpmEnv(): Record<string, string> {
   return {
     CI: 'true',
     npm_config_confirm_modules_purge: 'false',
-    NPM_CONFIG_CACHE: 'D:\\DeepSeekHarness\\cache\\npm',
-    DSH_HOME: 'D:\\DeepSeekHarness\\home',
-    DSH_AGENTS_HOME: 'D:\\DeepSeekHarness\\agents',
-    TEMP: 'D:\\DeepSeekHarness\\tmp',
-    TMP: 'D:\\DeepSeekHarness\\tmp',
+    NPM_CONFIG_CACHE: join(ROOT, 'cache', 'npm'),
+    DSH_HOME: join(ROOT, 'home'),
+    DSH_AGENTS_HOME: join(ROOT, 'agents'),
+    TEMP: join(ROOT, 'tmp'),
+    TMP: join(ROOT, 'tmp'),
     PATH: `${NODE_DIR};${process.env.PATH ?? ''}`,
   }
 }
