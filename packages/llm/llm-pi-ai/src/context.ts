@@ -10,12 +10,11 @@ import type { AttachmentStore } from '@deepseek-ai/dsh-attachment'
 import type { Context as PiContext, ImageContent, Message as PiMessage, TextContent, Tool as PiTool } from '@earendil-works/pi-ai'
 import { toPiAssistant } from './replay.ts'
 
-/** Join the text blocks of a harness message. */
+/** Join the text and file-projectable blocks of a harness message. */
 function flattenText(message: Message): string {
-  return message.content
-    .filter(block => block.type === 'text')
-    .map(block => block.text)
-    .join('')
+  return message.content.map(block => block.type === 'text'
+    ? block.text
+    : block.type === 'file' ? fileBlockText(block) : '').join('')
 }
 
 

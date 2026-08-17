@@ -34,6 +34,7 @@ import type {
 import {
   attributionHeaders,
   contentHasImage,
+  contentHasFile,
   LlmAdapter,
   LlmError,
   ReasoningEffortId,
@@ -300,10 +301,16 @@ export class PiAiAdapter extends LlmAdapter {
 
     try {
       const containsImage = options.messages.some(message => contentHasImage(message.content))
+      const containsFile = options.messages.some(message => contentHasFile(message.content))
       if (containsImage && !model.input.includes('image')) {
         throw new LlmError(`pi-ai model "${model.id}" does not support image input`, 'UNSUPPORTED_CONTENT')
       }
-      const attachments = containsImage ? this.config.resolveAttachments?.() : undefined
+      // File attachments ride the same durable-resolution path as images so
+      // their text projection (metadata header + extracted document text)
+      // reaches the model; the text-only flatten would otherwise drop them.
+      const attachments = (containsImage || containsFile)
+        ? this.config.resolveAttachments?.()
+        : undefined
       if (containsImage && attachments === undefined) {
         throw new LlmError('pi-ai image input requires the durable attachment service', 'UNSUPPORTED_CONTENT')
       }
