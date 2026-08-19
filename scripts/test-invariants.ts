@@ -122,21 +122,21 @@ class TestAttachmentStore extends AttachmentStore {
     maxImagePixels: 1,
     mediaTypes: ['image/png'],
   }
-  readonly fileLimits: FileAttachmentLimits = {
+  override readonly fileLimits: FileAttachmentLimits = {
     maxFileBytes: 1,
     maxFilesPerMessage: 1,
     maxMessageFileBytes: 1,
   }
 
-  validateFile(): Promise<void> {
+  override validateFile(): Promise<void> {
     return Promise.reject(new Error('test invariant attachment store does not validate files'))
   }
 
-  saveFile(): Promise<FileAttachmentRef> {
+  override saveFile(): Promise<FileAttachmentRef> {
     return Promise.reject(new Error('test invariant attachment store does not save files'))
   }
 
-  readFile(): Promise<StoredFileAttachment> {
+  override readFile(): Promise<StoredFileAttachment> {
     return Promise.reject(new Error('test invariant attachment store does not read files'))
   }
 

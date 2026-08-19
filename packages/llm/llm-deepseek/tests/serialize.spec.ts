@@ -29,7 +29,7 @@ describe('serializeMessages', () => {
     ])
     expect(wire).toEqual([{
       role: 'user',
-      content: '[Attachment: report.pdf (application/pdf, 12 bytes)]\nannual summary',
+      content: `[Attachment: report.pdf (application/pdf, 12 bytes, id: sha256:${'a'.repeat(64)})]\nannual summary`,
     }])
   })
 
@@ -50,7 +50,10 @@ describe('serializeMessages', () => {
         source: { kind: 'plugin', plugin: 'test' },
       }),
     ])
-    expect(wire).toEqual([{ role: 'user', content: '[Attachment: bundle.zip (application/zip, 9 bytes)]' }])
+    expect(wire).toEqual([{
+      role: 'user',
+      content: `[Attachment: bundle.zip (application/zip, 9 bytes, id: sha256:${'b'.repeat(64)})]`,
+    }])
   })
 
   it('still rejects image content on the text-only wire', () => {
@@ -267,13 +270,13 @@ describe('serializeRequest', () => {
     expect(wire.tools).toBeUndefined()
   })
 
-  it('maps adapter-default thinking and the request reasoning effort', () => {
+  it.each(['low', 'high', 'max'] as const)('maps adapter-default thinking and request effort %s', (effort) => {
     const wire = serializeRequest(
-      request({ messages: history, reasoningEffort: ReasoningEffortId('max') }),
+      request({ messages: history, reasoningEffort: ReasoningEffortId(effort) }),
       { thinking: 'enabled', reasoningEffort: 'high' },
     )
     expect(wire.thinking).toEqual({ type: 'enabled' })
-    expect(wire.reasoning_effort).toBe('max')
+    expect(wire.reasoning_effort).toBe(effort)
   })
 
   it('maps off to disabled thinking without a wire reasoning effort', () => {

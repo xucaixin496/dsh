@@ -1,6 +1,7 @@
 /** Durable attachment storage seam (`ctx.attachments`). @module @deepseek-ai/dsh-attachment */
 
 import { Context, Service } from '@deepseek-ai/cordis'
+import { AttachmentError } from './error.ts'
 import type {
   FileAttachmentLimits,
   FileAttachmentRef,
@@ -13,7 +14,8 @@ import type {
 } from './types.ts'
 
 export { AttachmentId } from './brand.ts'
-export { AttachmentError } from './error.ts'
+export { AttachmentError, isImageAdmissionError } from './error.ts'
+export type { AttachmentErrorCode, ImageAdmissionErrorCode } from './error.ts'
 export { ocrImagePng, ocrPdfPage, tessdataDir } from './ocr.ts'
 export { extractFileText, shouldExtractText } from './text.ts'
 export type {
@@ -45,8 +47,18 @@ export abstract class AttachmentStore extends Service {
   /** Deployment-resolved image policy used by authoritative and fast-path validation. */
   abstract readonly imageLimits: ImageAttachmentLimits
 
-  /** Deployment-resolved generic-file policy used by authoritative validation. */
-  abstract readonly fileLimits: FileAttachmentLimits
+  /**
+   * Deployment-resolved generic-file policy used by authoritative validation.
+   * The permissive fallback keeps image-only stores and test doubles
+   * compiling unchanged; the default file methods below throw
+   * `FILE_STORAGE_UNSUPPORTED` when a file is actually admitted.
+   */
+  readonly fileLimits: FileAttachmentLimits = {
+    maxFileBytes: Number.MAX_SAFE_INTEGER,
+    maxFilesPerMessage: Number.MAX_SAFE_INTEGER,
+    maxMessageFileBytes: Number.MAX_SAFE_INTEGER,
+    denyMediaTypes: [],
+  }
 
   /**
    * Validate one image without persisting it.
@@ -55,6 +67,35 @@ export abstract class AttachmentStore extends Service {
    * @returns completion after the encoded raster has been fully decoded.
    */
   abstract validateImage(input: SaveImageAttachment): Promise<void>
+
+  /**
+   * Validate one ordered image batch before committing any member.
+   * Validation failures start no writes; storage failures return no partial
+   * references, although already published content-addressed objects may stay
+   * unreachable until a future retention policy collects them.
+   * @param inputs - encoded images in their owning message order.
+   * @returns durable references in the exact input order.
+   */
+  async saveImages(inputs: readonly SaveImageAttachment[]): Promise<readonly ImageAttachmentRef[]> {
+    const { maxImagesPerMessage, maxMessageImageBytes, mediaTypes } = this.imageLimits
+    if (inputs.length > maxImagesPerMessage) {
+      throw new AttachmentError('Image batch exceeds the configured image-count limit.', 'TOO_MANY_IMAGES')
+    }
+    const totalBytes = inputs.reduce((sum, input) => sum + input.data.byteLength, 0)
+    if (totalBytes > maxMessageImageBytes) {
+      throw new AttachmentError('Image batch exceeds the configured aggregate image-byte limit.', 'IMAGES_TOO_LARGE')
+    }
+    for (const input of inputs) {
+      if (!mediaTypes.includes(input.mediaType)) {
+        throw new AttachmentError(`Image type ${input.mediaType} is not accepted by this deployment.`, 'UNSUPPORTED_IMAGE_TYPE')
+      }
+    }
+    for (const input of inputs) await this.validateImage(input)
+
+    const refs: ImageAttachmentRef[] = []
+    for (const input of inputs) refs.push(await this.saveImage(input))
+    return refs
+  }
 
   /**
    * Validate and durably commit one image before its owning session event is appended.
@@ -75,26 +116,41 @@ export abstract class AttachmentStore extends Service {
   /**
    * Validate one non-image file without persisting it.
    * Batch callers validate every member before saving any member.
-   * @param input - encoded bytes, declared media type, and optional display name.
+   * @param _input - encoded bytes, declared media type, and optional display name.
    * @returns completion after the admission policy has been applied.
    */
-  abstract validateFile(input: SaveFileAttachment): Promise<void>
+  validateFile(_input: SaveFileAttachment): Promise<void> {
+    return Promise.reject(new AttachmentError(
+      'This attachment store does not support generic file uploads.',
+      'FILE_STORAGE_UNSUPPORTED',
+    ))
+  }
 
   /**
    * Validate and durably commit one non-image file before its owning session event is appended.
-   * @param input - encoded bytes, declared media type, and optional display name.
+   * @param _input - encoded bytes, declared media type, and optional display name.
    * @returns a durable content-addressed reference.
    */
-  abstract saveFile(input: SaveFileAttachment): Promise<FileAttachmentRef>
+  saveFile(_input: SaveFileAttachment): Promise<FileAttachmentRef> {
+    return Promise.reject(new AttachmentError(
+      'This attachment store does not support generic file uploads.',
+      'FILE_STORAGE_UNSUPPORTED',
+    ))
+  }
 
   /**
    * Read one non-image file and verify that bytes still match the recorded reference.
-   * @param ref - durable reference from the session log.
-   * @param signal - optional cancellation for backend read and verification work.
+   * @param _ref - durable reference from the session log.
+   * @param _signal - optional cancellation for backend read and verification work.
    * @returns the verified bytes and canonical reference.
    * @throws the signal reason when aborted, or a storage error when verification fails.
    */
-  abstract readFile(ref: FileAttachmentRef, signal?: AbortSignal): Promise<StoredFileAttachment>
+  readFile(_ref: FileAttachmentRef, _signal?: AbortSignal): Promise<StoredFileAttachment> {
+    return Promise.reject(new AttachmentError(
+      'This attachment store does not support generic file uploads.',
+      'FILE_STORAGE_UNSUPPORTED',
+    ))
+  }
 }
 
 export default AttachmentStore

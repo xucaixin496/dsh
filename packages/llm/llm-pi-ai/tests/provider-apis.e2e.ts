@@ -14,7 +14,7 @@ import type {
 import LlmRuntime, { createUserMessage, CallId } from '@deepseek-ai/dsh-llm'
 import type { Message, ToolSchema } from '@deepseek-ai/dsh-llm'
 import * as LlmPiAi from '@deepseek-ai/dsh-llm-pi-ai'
-import type { PiAiReplayState } from '../src/replay.ts'
+import type { PiAiReplayResponse } from '../src/replay.ts'
 import { assemble, type AssembledResult } from './assemble.ts'
 
 interface ProviderCase {
@@ -75,21 +75,21 @@ async function harness(image?: StoredImageAttachment): Promise<Context> {
         maxImagePixels: fixture.ref.width * fixture.ref.height,
         mediaTypes: [fixture.ref.mediaType],
       }
-      readonly fileLimits: FileAttachmentLimits = {
+      override readonly fileLimits: FileAttachmentLimits = {
         maxFileBytes: fixture.data.byteLength,
         maxFilesPerMessage: 1,
         maxMessageFileBytes: fixture.data.byteLength,
       }
 
-      validateFile(): Promise<void> {
+      override validateFile(): Promise<void> {
         return Promise.reject(new Error('e2e attachment fixture is read-only'))
       }
 
-      saveFile(): Promise<FileAttachmentRef> {
+      override saveFile(): Promise<FileAttachmentRef> {
         return Promise.reject(new Error('e2e attachment fixture is read-only'))
       }
 
-      readFile(): Promise<StoredFileAttachment> {
+      override readFile(): Promise<StoredFileAttachment> {
         return Promise.reject(new Error('e2e attachment fixture is read-only'))
       }
 
@@ -138,18 +138,20 @@ function expectFinish(result: AssembledResult, expected: 'stop' | 'tool-calls'):
   expect(result.finish.kind).toBe(expected)
 }
 
-function expectNativeReplay(result: AssembledResult, profile: ProviderCase): PiAiReplayState {
+function expectNativeReplay(result: AssembledResult, profile: ProviderCase): PiAiReplayResponse {
   const replayState = result.message.source.kind === 'model'
     ? result.message.source.replayState
     : undefined
   expect(replayState).toMatchObject({
-    kind: 'pi-ai',
-    version: 1,
-    api: profile.api,
-    provider: profile.provider,
-    model: profile.model,
+    response: {
+      kind: 'pi-ai',
+      version: 2,
+      api: profile.api,
+      provider: profile.provider,
+      model: profile.model,
+    },
   })
-  return replayState as PiAiReplayState
+  return (replayState as { response: PiAiReplayResponse }).response
 }
 
 const lookupTool: ToolSchema = {

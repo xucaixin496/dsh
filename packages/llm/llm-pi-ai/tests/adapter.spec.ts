@@ -222,21 +222,21 @@ describe('PiAiAdapter provider routing', () => {
         maxImagePixels: 1,
         mediaTypes: ['image/png'],
       }
-      readonly fileLimits: FileAttachmentLimits = {
+      override readonly fileLimits: FileAttachmentLimits = {
         maxFileBytes: 1,
         maxFilesPerMessage: 1,
         maxMessageFileBytes: 1,
       }
 
-      validateFile(): Promise<void> {
+      override validateFile(): Promise<void> {
         return Promise.reject(new Error('not used'))
       }
 
-      saveFile(): Promise<FileAttachmentRef> {
+      override saveFile(): Promise<FileAttachmentRef> {
         return Promise.reject(new Error('not used'))
       }
 
-      readFile(): Promise<StoredFileAttachment> {
+      override readFile(): Promise<StoredFileAttachment> {
         return Promise.reject(new Error('not used'))
       }
 
@@ -290,18 +290,18 @@ describe('PiAiAdapter provider routing', () => {
         maxImagePixels: 1,
         mediaTypes: ['image/png'],
       }
-      readonly fileLimits: FileAttachmentLimits = {
+      override readonly fileLimits: FileAttachmentLimits = {
         maxFileBytes: 1,
         maxFilesPerMessage: 1,
         maxMessageFileBytes: 1,
       }
-      validateFile(): Promise<void> {
+      override validateFile(): Promise<void> {
         return Promise.resolve()
       }
-      saveFile(): Promise<FileAttachmentRef> {
+      override saveFile(): Promise<FileAttachmentRef> {
         return Promise.resolve(fileRef)
       }
-      readFile(): Promise<StoredFileAttachment> {
+      override readFile(): Promise<StoredFileAttachment> {
         return Promise.reject(new Error('not used'))
       }
       validateImage(_input: SaveImageAttachment): Promise<void> {

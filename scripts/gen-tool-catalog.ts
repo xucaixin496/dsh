@@ -82,7 +82,7 @@ class CatalogAttachmentStore extends AttachmentStore {
     maxImagePixels: 1,
     mediaTypes: Object.freeze(['image/png'] as const),
   })
-  readonly fileLimits: FileAttachmentLimits = Object.freeze({
+  override readonly fileLimits: FileAttachmentLimits = Object.freeze({
     maxFileBytes: 1,
     maxFilesPerMessage: 1,
     maxMessageFileBytes: 1,

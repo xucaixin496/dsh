@@ -346,21 +346,21 @@ describe('argument and service preconditions', () => {
         maxImagePixels: 100,
         mediaTypes: Object.freeze(['image/jpeg'] as const),
       })
-      readonly fileLimits: FileAttachmentLimits = {
+      override readonly fileLimits: FileAttachmentLimits = {
         maxFileBytes: 1024,
         maxFilesPerMessage: 1,
         maxMessageFileBytes: 1024,
       }
 
-      validateFile(): Promise<void> {
+      override validateFile(): Promise<void> {
         throw new Error('unreachable in this test')
       }
 
-      saveFile(): Promise<FileAttachmentRef> {
+      override saveFile(): Promise<FileAttachmentRef> {
         throw new Error('unreachable in this test')
       }
 
-      readFile(): Promise<StoredFileAttachment> {
+      override readFile(): Promise<StoredFileAttachment> {
         throw new Error('unreachable in this test')
       }
 
@@ -442,21 +442,21 @@ describe('image admission failures', () => {
         maxImagePixels: 100,
         mediaTypes: Object.freeze(['image/png'] as const),
       })
-      readonly fileLimits: FileAttachmentLimits = {
+      override readonly fileLimits: FileAttachmentLimits = {
         maxFileBytes: 1024,
         maxFilesPerMessage: 1,
         maxMessageFileBytes: 1024,
       }
 
-      validateFile(): Promise<void> {
+      override validateFile(): Promise<void> {
         return Promise.resolve()
       }
 
-      saveFile(): Promise<FileAttachmentRef> {
+      override saveFile(): Promise<FileAttachmentRef> {
         throw new Error('unreachable in this test')
       }
 
-      readFile(): Promise<StoredFileAttachment> {
+      override readFile(): Promise<StoredFileAttachment> {
         throw new Error('unreachable in this test')
       }
 

@@ -11,7 +11,7 @@ import { installModelSelection } from '@deepseek-ai/dsh-agent'
 import type { Agent, ModelSelection, ModelSelectionRef, AgentOptions, AgentStatus } from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-agent-presets/types'
 import { AttachmentError, extractFileText } from '@deepseek-ai/dsh-attachment'
-import type { FileAttachmentRef, ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
+import type { FileAttachmentRef, ImageAttachmentRef, ImageMediaType } from '@deepseek-ai/dsh-attachment'
 import { contentHasImage, createUserMessage, freezeMessage, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import { errorChain } from '@deepseek-ai/dsh-llm'
 import type { ContentBlock, MessageSource } from '@deepseek-ai/dsh-llm'
@@ -31,8 +31,7 @@ import {
 // Type-only: brings the `ctx.tools` Context merge into this program (viewFor reads presenters).
 import {
   InvalidPresetIdError, PresetExistsError, PresetMountError,
-  PresetNotWritableError, resolveSessionPreset,
-  SETTINGS_NAMESPACE as AGENT_PRESET_SETTINGS_NAMESPACE, UnknownPresetError,
+  PresetNotWritableError, resolveSessionPreset, UnknownPresetError,
 } from '@deepseek-ai/dsh-agent-presets'
 import type { PresetBearingSession } from '@deepseek-ai/dsh-agent-presets'
 import type {} from '@deepseek-ai/dsh-tools'
@@ -114,20 +113,6 @@ import { canOpenNativePath, openNativePath, openNativeTextFile } from './native-
 /** Page size when history is called without maxMessages. */
 const DEFAULT_MAX_MESSAGES = 50
 
-/**
- * Non-model settings namespaces intentionally served to the Web client. The
- * plugin-owned entries (`agent-loop`, `bash`, `web-search-deepseek`) are the
- * host-plane sections the plugin configuration page edits; a namespace absent
- * here answers `settings-not-exposed` even when its owner registered it, so
- * adding a section to that page is a decision made here rather than by the
- * registering plugin. Moving that declaration to `settings.register()`, so a
- * plugin can expose its own configuration without a change in this package,
- * is deferred work.
- */
-const WEB_SETTINGS_NAMESPACES = [
-  'agent-loop', 'shell', 'locale', 'permission', 'ui-conversation', 'ui-theme', 'web-search-deepseek',
-] as const
-
 /** Provider work budget: at most 100 calls and 2,000 inspected hits. */
 const SESSION_SEARCH_PROVIDER_CALL_LIMIT = 100
 
@@ -166,13 +151,8 @@ async function durablePromptContent(ctx: Context, content: readonly PromptConten
   if (content.every(part => part.type === 'text')) {
     return content.map(part => ({ type: 'text', text: part.text }))
   }
-  const imageLimits = ctx.attachments.imageLimits
   const fileLimits = ctx.attachments.fileLimits
-  const images = content.filter((part): part is Extract<PromptContentPart, { type: 'image' }> => part.type === 'image')
   const files = content.filter((part): part is Extract<PromptContentPart, { type: 'file' }> => part.type === 'file')
-  if (images.length > imageLimits.maxImagesPerMessage) {
-    throw new AttachmentError('Prompt exceeds the configured image-count limit.', 'TOO_MANY_IMAGES')
-  }
   if (files.length > fileLimits.maxFilesPerMessage) {
     throw new AttachmentError('Prompt exceeds the configured file-count limit.', 'TOO_MANY_FILES')
   }
@@ -180,24 +160,11 @@ async function durablePromptContent(ctx: Context, content: readonly PromptConten
     ? part
     : { part, data: decodeBase64(part.data) })
   const binary = prepared.filter((part): part is Extract<typeof part, { data: Uint8Array }> => 'data' in part)
-  const imageBytes = binary
-    .filter(item => item.part.type === 'image')
-    .reduce((sum, image) => sum + image.data.byteLength, 0)
   const fileBytes = binary
     .filter(item => item.part.type === 'file')
     .reduce((sum, file) => sum + file.data.byteLength, 0)
-  if (imageBytes > imageLimits.maxMessageImageBytes) {
-    throw new AttachmentError('Prompt exceeds the configured aggregate image-byte limit.', 'IMAGES_TOO_LARGE')
-  }
   if (fileBytes > fileLimits.maxMessageFileBytes) {
     throw new AttachmentError('Prompt exceeds the configured aggregate file-byte limit.', 'FILES_TOO_LARGE')
-  }
-  for (const image of binary.filter(item => item.part.type === 'image')) {
-    await ctx.attachments.validateImage({
-      data: image.data,
-      mediaType: image.part.mediaType as ImageAttachmentRef['mediaType'],
-      ...image.part.name === undefined ? {} : { name: image.part.name },
-    })
   }
   for (const file of binary.filter(item => item.part.type === 'file')) {
     await ctx.attachments.validateFile({
@@ -206,18 +173,28 @@ async function durablePromptContent(ctx: Context, content: readonly PromptConten
       ...file.part.name === undefined ? {} : { name: file.part.name },
     })
   }
+  // Images commit as one ordered batch (saveImages enforces its own count,
+  // byte, and type limits before any write); files save individually because
+  // each one gets its own server-side text projection.
+  const imageInputs = binary
+    .filter(item => item.part.type === 'image')
+    .map(image => ({
+      data: image.data,
+      mediaType: image.part.mediaType as ImageMediaType,
+      ...image.part.name === undefined ? {} : { name: image.part.name },
+    }))
+  const refs = imageInputs.length === 0 ? [] : await ctx.attachments.saveImages(imageInputs)
   const blocks: ContentBlock[] = []
+  let imageIndex = 0
   for (const item of prepared) {
     if (!('data' in item)) {
       blocks.push({ type: 'text', text: item.text })
       continue
     }
     if (item.part.type === 'image') {
-      const attachment = await ctx.attachments.saveImage({
-        data: item.data,
-        mediaType: item.part.mediaType as ImageAttachmentRef['mediaType'],
-        ...item.part.name === undefined ? {} : { name: item.part.name },
-      })
+      const attachment = refs[imageIndex++]
+      /* v8 ignore next -- each prepared image supplied exactly one saveImages input and therefore one ordered ref. */
+      if (attachment === undefined) throw new Error('attachment batch result did not preserve input cardinality')
       blocks.push({ type: 'image', attachment })
       continue
     }
@@ -342,17 +319,6 @@ function referencedFile(events: readonly SessionEvent[], attachmentId: string): 
   }
   return undefined
 }
-
-/**
- * Product settings intentionally exposed beside model-provider namespaces.
- *
- * The agent-preset namespace carries one field — which preset a session with
- * no explicit choice is composed from — and both browser surfaces that offer
- * that choice write it through `settings.update`, so it has to cross the
- * configuration boundary or the pickers silently fail to persist.
- */
-const PRODUCT_SETTINGS_NAMESPACES = new Set(['ui-onboarding', AGENT_PRESET_SETTINGS_NAMESPACE])
-
 /** Strict browser-zone profile: UTC or an IANA Area/Location-style identifier. */
 const IANA_TIME_ZONE = /^[A-Za-z][A-Za-z0-9_+.-]*(?:\/[A-Za-z0-9_+.-]+)+$/
 
@@ -400,7 +366,12 @@ function paginate(
     if (!MESSAGE_TYPES.has(event.type) || !isAppendSurfaceEvent(event)) continue
     count++
     const sources = (event as { sourceEventSeqs?: number[] }).sourceEventSeqs
-    const groupStart = sources !== undefined && sources.length > 0 ? Math.min(event.seq, ...sources) : event.seq
+    let groupStart = event.seq
+    if (sources !== undefined) {
+      for (const source of sources) {
+        if (source < groupStart) groupStart = source
+      }
+    }
     if (count >= maxMessages) {
       cut = groupStart
       break
@@ -2051,39 +2022,11 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
     }
   }
 
-  /** Settings namespaces whose changes can invalidate the model catalog. */
-  function modelProviderNamespaces(): Set<string> {
-    return new Set(ctx.llm.listConfigurableProviders().map(entry => entry.settingsNs))
-  }
-
-  /**
-   * The settings namespaces this proxy serves: configurable model providers
-   * plus the small explicit Web preference and product-owned allowlists. The
-   * settings seam remains general; a future registration does not become
-   * remotely readable or writable by default.
-   */
-  function exposedNamespaces(): Set<string> {
-    const exposed = modelProviderNamespaces()
-    for (const ns of WEB_SETTINGS_NAMESPACES) exposed.add(ns)
-    for (const ns of PRODUCT_SETTINGS_NAMESPACES) exposed.add(ns)
-    return exposed
-  }
-
-  /** Refuse a namespace outside the explicit configuration-client boundary. */
-  function notExposed(request: RpcRequest<unknown>, ns: string): RpcResponse<SettingsNamespaceView> {
-    return err(request, {
-      code: 'settings-not-exposed',
-      message: `settings namespace "${ns}" is not exposed to configuration clients`,
-      details: { ns },
-    })
-  }
-
   /**
    * Run one settings write (merge or wholesale replace) and acknowledge with
-   * the namespace's new redacted view. A namespace outside the configuration
-   * boundary is refused before the seam is touched; every seam refusal —
-   * unknown or invalid namespace, read-only provider, schema validation,
-   * storage — becomes one `settings-rejected` carrying the seam's own message.
+   * the namespace's new redacted view. Every seam refusal — unknown or invalid
+   * namespace, read-only provider, schema validation, storage — becomes one
+   * `settings-rejected` carrying the seam's own message.
    */
   async function settingsWrite(
     request: RpcRequest<unknown>,
@@ -2114,11 +2057,10 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
     try {
       branded = settingsNamespace(ns)
     } catch (error: unknown) {
-      // A malformed name is a client bug, reported as such; it could never be
-      // in the exposed set either, so naming the real fault costs no ground.
+      // A malformed name can address no registration, so it fails exactly as
+      // an unregistered one does.
       return rejected(error)
     }
-    if (!exposedNamespaces().has(ns)) return notExposed(request, ns)
     try {
       if (mode === 'update') await settings.update(branded, section, expectedRevision)
       else if (mode === 'replace') await settings.replace(branded, section, expectedRevision)
@@ -3556,13 +3498,10 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
       describe(request) {
         const settings = ctx.get('settings')
         if (settings === undefined) return Promise.resolve(err(request, settingsAbsent()))
-        const exposed = exposedNamespaces()
         return Promise.resolve(ok(request, {
           writable: settings.writable,
           hasDocument: settings.documentPath !== undefined,
-          namespaces: settings.describe({ redactSecrets: true })
-            .filter(descriptor => exposed.has(String(descriptor.ns)))
-            .map(namespaceView),
+          namespaces: settings.describe({ redactSecrets: true }).map(namespaceView),
         }))
       },
       async openDocument(request, signal) {

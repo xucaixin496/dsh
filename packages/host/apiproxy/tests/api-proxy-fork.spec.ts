@@ -484,11 +484,11 @@ describe('sessions.fork', () => {
         maxImageBytes: 1_000_000, maxImagesPerMessage: 10, maxMessageImageBytes: 10_000_000,
         maxImagePixels: 40_000_000, mediaTypes: ['image/png'],
       }
-      readonly fileLimits: FileAttachmentLimits = {
+      override readonly fileLimits: FileAttachmentLimits = {
         maxFileBytes: 10_000_000, maxFilesPerMessage: 10, maxMessageFileBytes: 100_000_000,
       }
-      validateFile(): Promise<void> { return Promise.resolve() }
-      saveFile(input: { data: Uint8Array; mediaType: string; name?: string }): Promise<FileAttachmentRef> {
+      override validateFile(): Promise<void> { return Promise.resolve() }
+      override saveFile(input: { data: Uint8Array; mediaType: string; name?: string }): Promise<FileAttachmentRef> {
         const id = `sha256:${String(savedIds.length).padStart(64, '0')}`
         savedIds.push(id)
         return Promise.resolve({
@@ -498,7 +498,7 @@ describe('sessions.fork', () => {
           ...input.name === undefined ? {} : { name: input.name },
         })
       }
-      readFile(): Promise<StoredFileAttachment> { return Promise.reject(new Error('not used')) }
+      override readFile(): Promise<StoredFileAttachment> { return Promise.reject(new Error('not used')) }
       validateImage(): Promise<void> { return Promise.resolve() }
       saveImage(input: SaveImageAttachment): Promise<ImageAttachmentRef> {
         const id = `sha256:${String(savedIds.length).padStart(64, '0')}`
