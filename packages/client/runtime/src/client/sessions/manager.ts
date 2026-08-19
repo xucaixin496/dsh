@@ -9,6 +9,7 @@ import type {
 // Value import from the inline-safe wire layer (not the connection plugin):
 // plugin-to-plugin value imports are a bundle purity error.
 import { transportError } from '@deepseek-ai/dsh-host-apiproxy/api'
+import type { PromptContentPart } from '@deepseek-ai/dsh-host-apiproxy/api'
 import { mergeOrderedBaseline } from '../ordered-baseline.ts'
 import type { ConversationRuntime } from './conversation-assembler.ts'
 import type { SessionListEntry, TitledSessionSummary } from './lineage.ts'
@@ -612,13 +613,23 @@ export class SessionManager {
    * @returns the regenerate result.
    */
   async regenerate(
-    opts: { sessionId: SessionId; atSeq: number; text?: string },
+    opts: {
+      sessionId: SessionId
+      atSeq: number
+      text?: string
+      removeAttachmentIds?: string[]
+      additions?: PromptContentPart[]
+    },
   ): Promise<RpcResult<{ accepted: true }>> {
     try {
       const { result } = await this.api.sessions.regenerate({
         sessionId: opts.sessionId,
         atSeq: opts.atSeq,
         ...(opts.text === undefined ? {} : { text: opts.text }),
+        ...(opts.removeAttachmentIds === undefined || opts.removeAttachmentIds.length === 0
+          ? {} : { removeAttachmentIds: opts.removeAttachmentIds }),
+        ...(opts.additions === undefined || opts.additions.length === 0
+          ? {} : { additions: opts.additions }),
       })
       return result
     } catch (error) {

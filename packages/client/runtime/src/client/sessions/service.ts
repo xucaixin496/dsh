@@ -21,6 +21,7 @@ import type {
 // Value import from the inline-safe wire layer (not the connection plugin):
 // plugin-to-plugin value imports are a bundle purity error.
 import { SESSION_SEARCH_RESULT_LIMIT } from '@deepseek-ai/dsh-host-apiproxy/api'
+import type { PromptContentPart } from '@deepseek-ai/dsh-host-apiproxy/api'
 import type {
   HostObservable, SessionMaybeProvideInfo, SessionProvideInfo,
 } from '@deepseek-ai/dsh-client-ui-slots'
@@ -544,6 +545,8 @@ export class SessionRuntime implements ISessions {
     sessionId: SessionId
     atSeq: number
     text?: string
+    removeAttachmentIds?: string[]
+    additions?: PromptContentPart[]
   }): Promise<RpcResult<{ accepted: true }>> {
     return this.manager.regenerate(opts)
   }

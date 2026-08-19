@@ -11,7 +11,7 @@ import type {
   TurnLocation, WorkspaceId,
 } from '@deepseek-ai/dsh-client-runtime/client'
 import type { MarkdownFileMentions } from '@deepseek-ai/dsh-client-ui-primitives'
-import type { MessageId } from '@deepseek-ai/dsh-client-connection/client'
+import type { MessageId, PromptContentPart } from '@deepseek-ai/dsh-client-connection/client'
 import type {} from '@deepseek-ai/dsh-client-ui-layout/client'
 import type { ComposerBlock } from '../input/blocks.ts'
 import type {
@@ -374,12 +374,18 @@ export interface ChatNodeOwnerProps {
   /**
    * Re-run a user message in place: the host shadows the anchored message's
    * turn and everything after it on the model surface, then answers the
-   * replacement message (`text`, or the original content when omitted) as the
-   * next turn in this SAME session — no branch is created. Resolves `false`
-   * when the host rejected the regenerate (e.g. the session is running), so
-   * an in-bubble editor can keep its draft for a retry.
+   * replacement message as the next turn in this SAME session — no branch is
+   * created. `options.text` replaces the text (omitted = original text);
+   * `removeAttachmentIds` drops those attachments from the re-run; `additions`
+   * uploads new images/files with the re-run. Resolves `false` when the host
+   * rejected the regenerate (e.g. the session is running), so an in-bubble
+   * editor can keep its draft for a retry.
    */
-  resendAt: (seq: number, text?: string) => Promise<boolean>
+  resendAt: (seq: number, options?: {
+    text?: string
+    removeAttachmentIds?: readonly string[]
+    additions?: PromptContentPart[]
+  }) => Promise<boolean>
   /** Resolve a session-authorized historical image for inline display. */
   loadImage: (attachment: ImageAttachmentRef) => Promise<string>
   /** Resolve a session-authorized historical file for download. */
@@ -723,11 +729,17 @@ export interface ChatViewInjected {
   forkAt: (seq: number) => void
   /**
    * Re-run the user message at `seq` in place: the host shadows its turn and
-   * everything after it, then re-answers the message (`text`, or the original
-   * content when omitted) in this same session. Resolves `false` when the host
-   * rejected the regenerate, keeping the source view untouched.
+   * everything after it, then re-answers the message in this same session.
+   * `options.text` replaces the text (omitted = original), options may also
+   * remove existing attachment ids and add new image/file uploads. Resolves
+   * `false` when the host rejected the regenerate, keeping the source view
+   * untouched.
    */
-  resendAt: (seq: number, text?: string) => Promise<boolean>
+  resendAt: (seq: number, options?: {
+    text?: string
+    removeAttachmentIds?: readonly string[]
+    additions?: PromptContentPart[]
+  }) => Promise<boolean>
   /**
    * Prose file-mention vocabulary for one closing message, from the optional
    * {@link ChatFileMentions} service (resolved lazily per call, so composing

@@ -216,12 +216,13 @@ export const CLIENT_SLOT_API: readonly ClientSlotEntry[] = [
       },
     ],
     ownerProps: [
-      '/** Stable owner currency delivered to one keyed Chat business renderer. */\nexport interface ChatNodeOwnerProps {\n  /** Selected Tool call, when the shared details store names one. */\n  selectedCallId?: CallId | undefined\n  /** Session workspace root; Tool summaries display paths relative to it. */\n  cwd?: string | undefined\n  openFile: (path: string) => void\n  inspectCall: (callId: CallId) => void\n  forkAt: (seq: number) => void\n  /**\n   * Re-run a user message in place: the host shadows the anchored message\'s\n   * turn and everything after it on the model surface, then answers the\n   * replacement message (`text`, or the original content when omitted) as the\n   * next turn in this SAME session — no branch is created. Resolves `false`\n   * when the host rejected the regenerate (e.g. the session is running), so\n   * an in-bubble editor can keep its draft for a retry.\n   */\n  resendAt: (seq: number, text?: string) => Promise<boolean>\n  /** Resolve a session-authorized historical image for inline display. */\n  loadImage: (attachment: ImageAttachmentRef) => Promise<string>\n  /** Resolve a session-authorized historical file for download. */\n  loadFile: (attachment: FileAttachmentRef) = /* …truncated — full shape in source */',
+      '/** Stable owner currency delivered to one keyed Chat business renderer. */\nexport interface ChatNodeOwnerProps {\n  /** Selected Tool call, when the shared details store names one. */\n  selectedCallId?: CallId | undefined\n  /** Session workspace root; Tool summaries display paths relative to it. */\n  cwd?: string | undefined\n  openFile: (path: string) => void\n  inspectCall: (callId: CallId) => void\n  forkAt: (seq: number) => void\n  /**\n   * Re-run a user message in place: the host shadows the anchored message\'s\n   * turn and everything after it on the model surface, then answers the\n   * replacement message as the next turn in this SAME session — no branch is\n   * created. `options.text` replaces the text (omitted = original text);\n   * `removeAttachmentIds` drops those attachments from the re-run; `additions`\n   * uploads new images/files with the re-run. Resolves `false` when the host\n   * rejected the regenerate (e.g. the session is running), so an in-bubble\n   * editor can keep its draft for a retry.\n   */\n  resendAt: (seq: number, options?: {\n    text?: string\n    removeAttachmentIds?: readonly string[]\n    additions?: PromptContentPart[]\n  }) => Promise<boolean>\n  /** Resolve /* …truncated — full shape in source */',
     ],
     ownerPropsReferences: [
       'FileAttachmentRef',
       'ImageAttachmentRef',
       'MarkdownFileMentions',
+      'PromptContentPart',
       'TurnTailOwnerProps',
     ],
     standardProps: [

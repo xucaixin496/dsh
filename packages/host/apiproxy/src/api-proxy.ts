@@ -2593,7 +2593,7 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
       },
 
       async regenerate(request) {
-        const { sessionId, atSeq, text } = request.payload
+        const { sessionId, atSeq, text, removeAttachmentIds, additions } = request.payload
         let source: SessionReadState
         try {
           source = await readSessionState(sessionId)
@@ -2671,12 +2671,39 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
           })
         }
         const original = target.data
-        const content: ContentBlock[] = text === undefined
+        let kept: ContentBlock[] = text === undefined
           ? original.content
           : [
               ...(text === '' ? [] : [{ type: 'text' as const, text }]),
               ...original.content.filter(block => block.type !== 'text'),
             ]
+        if (removeAttachmentIds !== undefined && removeAttachmentIds.length > 0) {
+          const removed = new Set(removeAttachmentIds)
+          kept = kept.filter(block => {
+            if (block.type !== 'file' && block.type !== 'image') return true
+            const id = block.attachment.attachmentId
+            return typeof id !== 'string' || !removed.has(id)
+          })
+        }
+        let content: ContentBlock[] = kept
+        if (additions !== undefined && additions.length > 0) {
+          try {
+            content = [...kept, ...await durablePromptContent(ctx, additions)]
+          } catch (error: unknown) {
+            if (error instanceof AttachmentError) {
+              return err(request, {
+                code: 'attachment-error',
+                message: error.message,
+                details: { reason: error.code },
+              })
+            }
+            return err(request, {
+              code: 'internal',
+              message: `regenerate additions failed: ${String(error)}`,
+              details: {},
+            })
+          }
+        }
         if (content.length === 0) {
           return err(request, {
             code: 'invalid-request',

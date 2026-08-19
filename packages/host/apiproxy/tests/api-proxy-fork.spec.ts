@@ -5,6 +5,12 @@ import { Context } from '@deepseek-ai/cordis'
 import AgentRegistry, { agentEvents } from '@deepseek-ai/dsh-agent'
 import type { Agent, AgentHandle, CreateAgentOptions } from '@deepseek-ai/dsh-agent'
 import { createUserMessage, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
+import { AttachmentId } from '@deepseek-ai/dsh-attachment'
+import { AttachmentStore } from '@deepseek-ai/dsh-attachment'
+import type {
+  FileAttachmentLimits, FileAttachmentRef, ImageAttachmentLimits, ImageAttachmentRef,
+  SaveImageAttachment, StoredFileAttachment, StoredImageAttachment,
+} from '@deepseek-ai/dsh-attachment'
 import type { LlmCallConfig } from '@deepseek-ai/dsh-llm'
 import SessionStore from '@deepseek-ai/dsh-session'
 import type { Session, SessionEvent, SessionHeader, SessionId } from '@deepseek-ai/dsh-session'
@@ -387,6 +393,162 @@ describe('sessions.fork', () => {
       sessionId: source.id, atSeq: turnEnd?.seq ?? 0,
     }))
     expect(response.result).toMatchObject({ ok: false, error: { code: 'invalid-request' } })
+    await ctx.fiber.dispose()
+  })
+
+  it('regenerate keeps file attachments verbatim on plain and edited resends', async () => {
+    const ctx = await composed()
+    const session = ctx.sessions.create(sid('session-regenerate-file'), { meta: { cwd: '/proj' } })
+    session.append('turn/start', { turn: 1 })
+    session.append('user/message', createUserMessage({
+      content: [
+        { type: 'text', text: 'read this' },
+        {
+          type: 'file',
+          attachment: {
+            attachmentId: AttachmentId(`sha256:${'f'.repeat(64)}`),
+            mediaType: 'application/pdf',
+            bytes: 3,
+            name: 'a.pdf',
+          },
+          text: 'pdf text',
+        },
+      ],
+      source: { kind: 'user' },
+    }), { surfaceOp: 'append' })
+    session.append('turn/end', { turn: 1, reason: { kind: 'completed' } })
+    ctx.agents.register({
+      id: session.id, session, status: 'idle', ctx,
+      followup: vi.fn() as unknown as Agent['followup'],
+    } as Agent)
+    const userSeq = session.events.find(event => event.type === 'user/message')?.seq
+    expect(userSeq).toBeDefined()
+    if (userSeq === undefined) return
+
+    const proxy = api(ctx)
+    const followup = (ctx.agents.get(session.id)?.followup ?? vi.fn()) as unknown as ReturnType<typeof vi.fn>
+
+    const plain = await proxy.sessions.regenerate(request({ sessionId: session.id, atSeq: userSeq }))
+    expect(plain.result.ok).toBe(true)
+    if (plain.result.ok) {
+      const message = followup.mock.calls[0]?.[0] as {
+        content: readonly { type: string; text?: string; attachment?: { attachmentId: string } }[]
+      }
+      expect(message.content.map(block => block.type)).toEqual(['text', 'file'])
+      expect(message.content[1]?.attachment?.attachmentId).toContain('ffff')
+    }
+
+    const edited = await proxy.sessions.regenerate(request({
+      sessionId: session.id, atSeq: userSeq, text: 'edited',
+    }))
+    expect(edited.result.ok).toBe(true)
+    if (edited.result.ok) {
+      const message = followup.mock.calls[1]?.[0] as {
+        content: readonly { type: string; text?: string; attachment?: { attachmentId: string } }[]
+      }
+      expect(message.content.map(block => block.type)).toEqual(['text', 'file'])
+      expect(message.content[0]).toMatchObject({ type: 'text', text: 'edited' })
+    }
+    await ctx.fiber.dispose()
+  })
+
+  it('regenerate drops removed attachment ids and uploads additions', async () => {
+    const ctx = await composed()
+    const session = ctx.sessions.create(sid('session-regenerate-attachments'), { meta: { cwd: '/proj' } })
+    const fileId = `sha256:${'f'.repeat(64)}`
+    session.append('turn/start', { turn: 1 })
+    session.append('user/message', createUserMessage({
+      content: [
+        { type: 'text', text: 'read this' },
+        {
+          type: 'file',
+          attachment: { attachmentId: AttachmentId(fileId), mediaType: 'application/pdf', bytes: 3, name: 'a.pdf' },
+          text: 'pdf text',
+        },
+      ],
+      source: { kind: 'user' },
+    }), { surfaceOp: 'append' })
+    session.append('turn/end', { turn: 1, reason: { kind: 'completed' } })
+    ctx.agents.register({
+      id: session.id, session, status: 'idle', ctx,
+      followup: vi.fn() as unknown as Agent['followup'],
+    } as Agent)
+    const userSeq = session.events.find(event => event.type === 'user/message')?.seq
+    expect(userSeq).toBeDefined()
+    if (userSeq === undefined) return
+
+    // Minimal attachment store so the additions upload path can save bytes.
+    const savedIds: string[] = []
+    class FakeAttachmentStore extends AttachmentStore {
+      readonly imageLimits: ImageAttachmentLimits = {
+        maxImageBytes: 1_000_000, maxImagesPerMessage: 10, maxMessageImageBytes: 10_000_000,
+        maxImagePixels: 40_000_000, mediaTypes: ['image/png'],
+      }
+      readonly fileLimits: FileAttachmentLimits = {
+        maxFileBytes: 10_000_000, maxFilesPerMessage: 10, maxMessageFileBytes: 100_000_000,
+      }
+      validateFile(): Promise<void> { return Promise.resolve() }
+      saveFile(input: { data: Uint8Array; mediaType: string; name?: string }): Promise<FileAttachmentRef> {
+        const id = `sha256:${String(savedIds.length).padStart(64, '0')}`
+        savedIds.push(id)
+        return Promise.resolve({
+          attachmentId: AttachmentId(id),
+          mediaType: input.mediaType,
+          bytes: input.data.byteLength,
+          ...input.name === undefined ? {} : { name: input.name },
+        })
+      }
+      readFile(): Promise<StoredFileAttachment> { return Promise.reject(new Error('not used')) }
+      validateImage(): Promise<void> { return Promise.resolve() }
+      saveImage(input: SaveImageAttachment): Promise<ImageAttachmentRef> {
+        const id = `sha256:${String(savedIds.length).padStart(64, '0')}`
+        savedIds.push(id)
+        return Promise.resolve({
+          attachmentId: AttachmentId(id),
+          mediaType: input.mediaType,
+          bytes: input.data.byteLength,
+          width: 1,
+          height: 1,
+          ...input.name === undefined ? {} : { name: input.name },
+        })
+      }
+      readImage(): Promise<StoredImageAttachment> { return Promise.reject(new Error('not used')) }
+    }
+    await ctx.plugin(FakeAttachmentStore)
+
+    const proxy = api(ctx)
+    const followup = (ctx.agents.get(session.id)?.followup ?? vi.fn()) as unknown as ReturnType<typeof vi.fn>
+
+    const removed = await proxy.sessions.regenerate(request({
+      sessionId: session.id, atSeq: userSeq, text: 'edited', removeAttachmentIds: [fileId],
+    }))
+    expect(removed.result.ok).toBe(true)
+    if (removed.result.ok) {
+      const message = followup.mock.calls[0]?.[0] as { content: readonly { type: string }[] }
+      expect(message.content.map(block => block.type)).toEqual(['text'])
+    }
+
+    const withAdditions = await proxy.sessions.regenerate(request({
+      sessionId: session.id,
+      atSeq: userSeq,
+      text: 'edited again',
+      removeAttachmentIds: [fileId],
+      additions: [{
+        type: 'file',
+        mediaType: 'text/plain',
+        data: Buffer.from('hello file').toString('base64'),
+        name: 'b.txt',
+      }],
+    }))
+    expect(withAdditions.result.ok).toBe(true)
+    if (withAdditions.result.ok) {
+      const message = followup.mock.calls[1]?.[0] as {
+        content: readonly { type: string; text?: string; attachment?: { attachmentId: string } }[]
+      }
+      expect(message.content.map(block => block.type)).toEqual(['text', 'file'])
+      expect(message.content[1]?.attachment?.attachmentId).toContain('0000')
+      expect(message.content[1]).toMatchObject({ text: 'hello file' })
+    }
     await ctx.fiber.dispose()
   })
 

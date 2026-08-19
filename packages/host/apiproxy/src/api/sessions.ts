@@ -362,7 +362,15 @@ export interface SessionsApi {
    * The session must be idle: a running turn is rejected with `agent-busy`, as
    * is an anchor that is no longer a live surface node (already regenerated).
    */
-  regenerate(request: RpcRequest<{ sessionId: SessionId; atSeq: number; text?: string }>):
+  regenerate(request: RpcRequest<{
+    sessionId: SessionId
+    atSeq: number
+    text?: string
+    /** Attachment ids to drop from the re-run (X'd in the edit UI). */
+    removeAttachmentIds?: string[]
+    /** New image/file uploads to add to the re-run, in the prompt wire shape. */
+    additions?: PromptContentPart[]
+  }>):
   Promise<RpcResponse<{ accepted: true }>>
 
   /**

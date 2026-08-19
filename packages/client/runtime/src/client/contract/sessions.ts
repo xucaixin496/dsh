@@ -9,7 +9,7 @@
  */
 import type { Context } from '@deepseek-ai/cordis'
 import type {
-  RpcResult, SessionId, SubagentAddress,
+  PromptContentPart, RpcResult, SessionId, SubagentAddress,
 } from '@deepseek-ai/dsh-api-remotes/client'
 import type { HostObservable, SessionMaybeProvideInfo } from '@deepseek-ai/dsh-client-ui-slots'
 import type { AgentContext } from '../agents/scope.ts'
@@ -114,6 +114,8 @@ export interface ISessions {
     sessionId: SessionId
     atSeq: number
     text?: string
+    removeAttachmentIds?: string[]
+    additions?: PromptContentPart[]
   }): Promise<RpcResult<{ accepted: true }>>
   /**
    * Register a per-session standard-props provider (hooks become `use<Name>`
