@@ -536,6 +536,19 @@ export class SessionRuntime implements ISessions {
   }
 
   /**
+   * Re-run one user message in place (surface rewrite; no branch is created).
+   * @param opts - session, the anchored user-message seq, and optional edited text.
+   * @returns the regenerate result; failures keep the source view untouched.
+   */
+  async regenerate(opts: {
+    sessionId: SessionId
+    atSeq: number
+    text?: string
+  }): Promise<RpcResult<{ accepted: true }>> {
+    return this.manager.regenerate(opts)
+  }
+
+  /**
    * Resolve an Agent-scoped context view (use-and-discard).
    * @param id - session id (the agent identity — 1:1 same axis).
    * @returns scoped ctx, or undefined for a session neither listed nor already scoped.

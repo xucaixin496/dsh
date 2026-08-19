@@ -367,7 +367,9 @@ export const UserMessageNodeView = memo(function UserMessageNodeView({
   const resend = useCallback(() => {
     if (sending || text.trim() === '') return
     setSending(true)
-    void resendAt(node.data.seq, text).finally(() => setSending(false))
+    // Plain regenerate re-runs the ORIGINAL message content (attachments
+    // included); only the edit path sends replacement text.
+    void resendAt(node.data.seq).finally(() => setSending(false))
   }, [sending, text, resendAt, node.data.seq])
   const canEdit = text.trim() !== ''
   return (

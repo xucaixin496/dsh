@@ -11,6 +11,7 @@ import { compactionDefinition } from '../src/client/conversation-nodes/compactio
 import { unknownFallbackDefinition } from '../src/client/conversation-nodes/fallback.ts'
 import { nextStepInboxDefinition, nextTurnInboxDefinition } from '../src/client/conversation-nodes/inbox.ts'
 import { messageDefinition } from '../src/client/conversation-nodes/message.ts'
+import { regenerateDefinition } from '../src/client/conversation-nodes/regenerate.ts'
 import { retryDefinition } from '../src/client/conversation-nodes/retry.ts'
 import { toolDefinition } from '../src/client/conversation-nodes/tool.ts'
 import { turnErrorDefinition } from '../src/client/conversation-nodes/turn-error.ts'
@@ -24,6 +25,7 @@ const DEFINITIONS: readonly ConversationNodeDefinition[] = [
   nextTurnInboxDefinition,
   nextStepInboxDefinition,
   messageDefinition,
+  regenerateDefinition,
   assistantDefinition,
   toolDefinition,
   commandDefinition,
@@ -929,5 +931,48 @@ describe('built-in conversation node Definitions', () => {
       command: { commandId: 'command-1', name: 'compact', outcome: { kind: 'success' } },
       compaction: { summary: 'manual summary', summaryEventSeq: 20 },
     })
+  })
+
+  it('renders a regenerate replacement as a user bubble and hides the shadowed turns', () => {
+    const value = assembler([
+      at(1, 'turn/start', { turn: 1 }),
+      at(2, 'user/message', textMessage('u1', 'one'), { surfaceOp: 'append' }),
+      at(3, 'assistant/message', {
+        turn: 1, step: 1, message: assistantMessage('a1', 'first'),
+      }, { surfaceOp: 'append' }),
+      at(4, 'turn/end', { turn: 1, reason: { kind: 'completed' } }),
+      at(5, 'turn/start', { turn: 2 }),
+      at(6, 'user/message', textMessage('u2', 'two'), { surfaceOp: 'append' }),
+      at(7, 'assistant/message', {
+        turn: 2, step: 1, message: assistantMessage('a2', 'second'),
+      }, { surfaceOp: 'append' }),
+      at(8, 'turn/end', { turn: 2, reason: { kind: 'completed' } }),
+      at(9, 'turn/start', { turn: 3 }),
+      at(10, 'user/message', textMessage('u2r', 'two (edited)'), {
+        surfaceOp: { op: 'replace', start: 6, end: 7 },
+        sourceEventSeqs: [6, 7],
+      }),
+      at(11, 'assistant/message', {
+        turn: 3, step: 1, message: assistantMessage('a2r', 'regenerated'),
+      }, { surfaceOp: 'append' }),
+      at(12, 'turn/end', { turn: 3, reason: { kind: 'completed' } }),
+    ])
+    const chat = snapshot(value)
+    // The node store keeps every logged event; the ordered transcript is the
+    // visibility authority and must exclude the shadowed turn's nodes.
+    const visible = chat.order.map(key => chat.nodes.get(key)).filter((candidate): candidate is ChatConversationViewNode =>
+      candidate !== undefined)
+    const visibleUsers = visible.filter(candidate => candidate.kind === 'user')
+    const visibleAssistants = visible.filter(candidate => candidate.kind === 'assistant-step')
+    expect(visibleUsers.map(node => (node.data as { content: readonly { type: string; text: string }[] }).content[0]?.text))
+      .toEqual(['one', 'two (edited)'])
+    const replacement = chat.nodes.values().find(candidate =>
+      candidate.kind === 'user' &&
+      (candidate.data as { seq: number }).seq === 10)
+    expect((replacement?.data as { shadowedSeqs?: readonly number[] }).shadowedSeqs).toEqual([6, 7])
+    const assistantTexts = visibleAssistants
+      .map(node => (node.data as { blocks: readonly { kind: string; text: string }[] }).blocks)
+      .flatMap(blocks => blocks.filter(block => block.kind === 'text').map(block => block.text))
+    expect(assistantTexts).toEqual(['first', 'regenerated'])
   })
 })

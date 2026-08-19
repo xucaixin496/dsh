@@ -604,6 +604,29 @@ export class SessionManager {
   }
 
   /**
+   * Contract session.regenerate: re-run the anchored user message in place.
+   * The host shadows that message's turn and everything after it on the model
+   * surface, then answers the replacement message as the next turn in this
+   * same session — no branch is created.
+   * @param opts - session, the anchored user-message seq, and optional edited text.
+   * @returns the regenerate result.
+   */
+  async regenerate(
+    opts: { sessionId: SessionId; atSeq: number; text?: string },
+  ): Promise<RpcResult<{ accepted: true }>> {
+    try {
+      const { result } = await this.api.sessions.regenerate({
+        sessionId: opts.sessionId,
+        atSeq: opts.atSeq,
+        ...(opts.text === undefined ? {} : { text: opts.text }),
+      })
+      return result
+    } catch (error) {
+      return transportError(error)
+    }
+  }
+
+  /**
    * Insert-or-enrich a locally synthesized summary: a new id prepends; an
    * existing entry only gains fields it lacks (the session-added frame and the
    * create() echo race — whichever lands second must fill the placeholder's

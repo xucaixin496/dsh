@@ -145,6 +145,18 @@ export const sessionForkValueSchema = z.object({
   sessionId: sessionIdSchema,
 }) satisfies z.ZodType<Wire<ResponseValue<'session.fork'>>>
 
+/** session.regenerate request payload (atSeq anchors the rolled-back user message). */
+export const sessionRegenerateRequestSchema = z.object({
+  sessionId: sessionIdSchema,
+  atSeq: z.number().int().nonnegative(),
+  text: z.string().optional(),
+}) satisfies z.ZodType<Wire<RequestPayload<'session.regenerate'>>>
+
+/** session.regenerate response value. */
+export const sessionRegenerateValueSchema = z.object({
+  accepted: z.literal(true),
+}) satisfies z.ZodType<Wire<ResponseValue<'session.regenerate'>>>
+
 /** session.history request payload (beforeSeq/maxMessages page backwards from the window tail). */
 export const sessionHistoryRequestSchema = z.object({
   sessionId: sessionIdSchema,

@@ -14,6 +14,7 @@ import type { Workspace } from '@deepseek-ai/dsh-workspace'
 import type { RpcRequest } from '@deepseek-ai/dsh-host-apiproxy/api/rpc'
 import { RpcId } from '@deepseek-ai/dsh-host-apiproxy/api/rpc'
 import { createApiProxy } from '@deepseek-ai/dsh-host-apiproxy'
+import { foldSurface } from '@deepseek-ai/dsh-session/surface'
 
 const sid = (id: string): SessionId => id as SessionId
 
@@ -37,7 +38,13 @@ async function composed(workspaces: readonly Workspace[] = []): Promise<Context>
       })
       const agent = {} as Agent
       const agentCtx = ownerCtx.extend({ agent })
-      Object.assign(agent, { id: session.id, session, status: 'idle', ctx: agentCtx })
+      Object.assign(agent, {
+        id: session.id,
+        session,
+        status: 'idle',
+        ctx: agentCtx,
+        followup: vi.fn() as unknown as Agent['followup'],
+      })
       await options.setup?.(agentCtx)
       ctx.agents.register(agent)
       return { agent, dispose: () => Promise.resolve() }
@@ -77,7 +84,10 @@ function liveAgent(
       reason: { kind: 'aborted', reason: { kind: 'user' } },
     })
   }
-  ctx.agents.register({ id: session.id, session, status: 'idle', ctx } as Agent)
+  ctx.agents.register({
+    id: session.id, session, status: 'idle', ctx,
+    followup: vi.fn() as unknown as Agent['followup'],
+  } as Agent)
   return session
 }
 
@@ -305,6 +315,78 @@ describe('sessions.fork', () => {
       ok: false,
       error: { code: 'invalid-request' },
     })
+    await ctx.fiber.dispose()
+  })
+
+  it('regenerates in place: shadows the anchored range and reuses original content', async () => {
+    const ctx = await composed()
+    const source = liveAgent(ctx, 'session-regenerate', 3)
+    const userSeqs = source.events.filter(event => event.type === 'user/message').map(event => event.seq)
+    const target = userSeqs[1]
+    expect(target).toBeDefined()
+    if (target === undefined) return
+    const nodes = foldSurface(source.events).nodes
+    const response = await api(ctx).sessions.regenerate(request({ sessionId: source.id, atSeq: target }))
+    expect(response.result.ok).toBe(true)
+    if (!response.result.ok) return
+    const followup = (ctx.agents.get(source.id)?.followup ?? vi.fn()) as unknown as ReturnType<typeof vi.fn>
+    expect(followup).toHaveBeenCalledTimes(1)
+    const message = followup.mock.calls[0]?.[0] as {
+      surfaceReplace?: { start: number; end: number }
+      surfaceSourceSeqs?: readonly number[]
+      content: readonly { type: string; text: string }[]
+    }
+    expect(message.surfaceReplace).toEqual({ start: target, end: nodes[nodes.length - 1] })
+    expect(message.surfaceSourceSeqs).toEqual(nodes.slice(1))
+    expect(message.content).toEqual([{ type: 'text', text: 'prompt 2' }])
+    await ctx.fiber.dispose()
+  })
+
+  it('regenerate replaces text with edited text and keeps non-text blocks', async () => {
+    const ctx = await composed()
+    const source = liveAgent(ctx, 'session-regenerate-edit', 2)
+    const userSeqs = source.events.filter(event => event.type === 'user/message').map(event => event.seq)
+    const target = userSeqs[0]
+    expect(target).toBeDefined()
+    if (target === undefined) return
+    const response = await api(ctx).sessions.regenerate(request({
+      sessionId: source.id, atSeq: target, text: 'edited first prompt',
+    }))
+    expect(response.result.ok).toBe(true)
+    if (!response.result.ok) return
+    const followup = (ctx.agents.get(source.id)?.followup ?? vi.fn()) as unknown as ReturnType<typeof vi.fn>
+    const message = followup.mock.calls[0]?.[0] as { content: readonly { type: string; text?: string }[] }
+    expect(message.content).toEqual([{ type: 'text', text: 'edited first prompt' }])
+    await ctx.fiber.dispose()
+  })
+
+  it('rejects regenerate while a turn is open or the agent is running', async () => {
+    const ctx = await composed()
+    const proxy = api(ctx)
+    const source = liveAgent(ctx, 'session-regenerate-open', 1, 'open')
+    const userSeqs = source.events.filter(event => event.type === 'user/message').map(event => event.seq)
+    const busy = await proxy.sessions.regenerate(request({ sessionId: source.id, atSeq: userSeqs[0] ?? 0 }))
+    expect(busy.result).toMatchObject({ ok: false, error: { code: 'agent-busy' } })
+
+    const running = liveAgent(ctx, 'session-regenerate-running', 1)
+    const runningAgent = ctx.agents.get(running.id)
+    Object.assign(runningAgent ?? {}, { status: 'running' })
+    const runningUserSeqs = running.events.filter(event => event.type === 'user/message').map(event => event.seq)
+    const refused = await proxy.sessions.regenerate(request({
+      sessionId: running.id, atSeq: runningUserSeqs[0] ?? 0,
+    }))
+    expect(refused.result).toMatchObject({ ok: false, error: { code: 'agent-busy' } })
+    await ctx.fiber.dispose()
+  })
+
+  it('rejects regenerate for an anchor that is not a user message', async () => {
+    const ctx = await composed()
+    const source = liveAgent(ctx, 'session-regenerate-bad-anchor', 1)
+    const turnEnd = source.events.findLast(event => event.type === 'turn/end')
+    const response = await api(ctx).sessions.regenerate(request({
+      sessionId: source.id, atSeq: turnEnd?.seq ?? 0,
+    }))
+    expect(response.result).toMatchObject({ ok: false, error: { code: 'invalid-request' } })
     await ctx.fiber.dispose()
   })
 

@@ -16,6 +16,7 @@ import { contentHasImage, createUserMessage, freezeMessage, ReasoningEffortId } 
 import { errorChain } from '@deepseek-ai/dsh-llm'
 import type { ContentBlock, MessageSource } from '@deepseek-ai/dsh-llm'
 import { isAppendSurfaceEvent, isJsonValue } from '@deepseek-ai/dsh-session'
+import { foldSurface } from '@deepseek-ai/dsh-session/surface'
 import type { JsonValue, Session, SessionEvent, SessionEventMap, SessionHeader, SessionId, UserMessage } from '@deepseek-ai/dsh-session'
 import type { SessionPersistence } from '@deepseek-ai/dsh-session-persistence'
 import { SessionQueryError, type SessionSearchCursor } from '@deepseek-ai/dsh-session-query'
@@ -145,6 +146,19 @@ function decodeBase64(data: string): Uint8Array {
     throw new AttachmentError('Image upload is not canonical base64.', 'INVALID_IMAGE_BASE64')
   }
   return new Uint8Array(decoded)
+}
+
+/** Count messages still pending in the durable agent inbox, replaying spliced events. */
+function pendingInboxMessageCount(events: readonly SessionEvent[]): number {
+  const nextTurn: unknown[] = []
+  const nextStep: unknown[] = []
+  for (const event of events) {
+    if (event.type !== 'agent/inbox/spliced') continue
+    const splice = event.data
+    const list = splice.target === 'next-step' ? nextStep : nextTurn
+    list.splice(splice.start, splice.removedCount ?? 0, ...splice.inserted)
+  }
+  return nextTurn.length + nextStep.length
 }
 
 /** Validate one prompt as a batch before publishing any durable attachment object. */
@@ -2576,6 +2590,110 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
           }
         }
         return ok(request, { sessionId: childId })
+      },
+
+      async regenerate(request) {
+        const { sessionId, atSeq, text } = request.payload
+        let source: SessionReadState
+        try {
+          source = await readSessionState(sessionId)
+        } catch (error: unknown) {
+          if (error instanceof SessionNotFound) {
+            return err(request, { code: 'session-not-found', message: error.message, details: { sessionId } })
+          }
+          return err(request, {
+            code: 'internal',
+            message: `regenerate source unavailable for session "${sessionId}": ${String(error)}`,
+            details: {},
+          })
+        }
+        const events = source.events
+        const target = events[atSeq]
+        if (target === undefined || target.type !== 'user/message') {
+          return err(request, {
+            code: 'invalid-request',
+            message: `session "${sessionId}" has no user message at seq ${String(atSeq)}`,
+            details: {},
+          })
+        }
+        // The anchor must still be a live surface node: a message already
+        // rolled back by an earlier regenerate is no longer on the surface.
+        const nodes = foldSurface(events).nodes
+        const startIndex = nodes.indexOf(atSeq)
+        if (startIndex === -1) {
+          return err(request, {
+            code: 'invalid-request',
+            message: `session "${sessionId}" message at seq ${String(atSeq)} was already superseded`,
+            details: {},
+          })
+        }
+        // Regenerate rewrites the CURRENT surface: it requires the agent to be
+        // idle with no queued input and no open turn, so the replacement range
+        // computed here is exactly what the append-time fold will validate.
+        let openTurn = false
+        for (const event of events) {
+          if (event.type === 'turn/start') openTurn = true
+          else if (event.type === 'turn/end') openTurn = false
+        }
+        if (openTurn) {
+          return err(request, {
+            code: 'agent-busy',
+            message: `session "${sessionId}" has a turn in progress`,
+            details: { reason: 'a turn is still running' },
+          })
+        }
+        const pending = pendingInboxMessageCount(events)
+        if (pending > 0) {
+          return err(request, {
+            code: 'agent-busy',
+            message: `session "${sessionId}" has ${String(pending)} queued message(s); wait for them to run before regenerating`,
+            details: { reason: 'queued messages are pending' },
+          })
+        }
+        const resolved = await turnAgentFor<{ accepted: true }>(request, sessionId)
+        if ('refused' in resolved) return resolved.refused
+        const agent = resolved.agent
+        if (agent.status === 'running') {
+          return err(request, {
+            code: 'agent-busy',
+            message: `session "${sessionId}" is running; stop it or wait before regenerating`,
+            details: { reason: 'the agent is running' },
+          })
+        }
+        const shadowed = nodes.slice(startIndex)
+        const start = nodes[startIndex]
+        const end = nodes[nodes.length - 1]
+        if (start === undefined || end === undefined) {
+          return err(request, {
+            code: 'internal',
+            message: `session "${sessionId}" surface is empty while regenerating`,
+            details: {},
+          })
+        }
+        const original = target.data
+        const content: ContentBlock[] = text === undefined
+          ? original.content
+          : [
+              ...(text === '' ? [] : [{ type: 'text' as const, text }]),
+              ...original.content.filter(block => block.type !== 'text'),
+            ]
+        if (content.length === 0) {
+          return err(request, {
+            code: 'invalid-request',
+            message: 'regenerate requires non-empty content',
+            details: {},
+          })
+        }
+        const message = createUserMessage({
+          content,
+          source: { kind: 'user', rpcId: request.rpcId },
+          surfaceReplace: { start, end },
+          surfaceSourceSeqs: shadowed,
+        })
+        // The agent loop lands this message as a surface replacement (the new
+        // tail node) and then answers it as the next turn in this same session.
+        agent.followup(message)
+        return ok(request, { accepted: true as const })
       },
 
       async prompt(request) {

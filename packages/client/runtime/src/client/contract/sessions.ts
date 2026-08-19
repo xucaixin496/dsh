@@ -103,6 +103,19 @@ export interface ISessions {
     increaseTitle?: boolean
   }): Promise<SessionId>
   /**
+   * Re-run one user message in place: the host shadows the anchored message's
+   * turn and everything after it on the model surface, then answers the
+   * replacement message as the next turn in this SAME session — no branch is
+   * created. Rejected while the session is running or has queued input.
+   * @param opts - session id, the anchored user-message seq, and optional edited text.
+   * @returns the regenerate result.
+   */
+  regenerate(opts: {
+    sessionId: SessionId
+    atSeq: number
+    text?: string
+  }): Promise<RpcResult<{ accepted: true }>>
+  /**
    * Register a per-session standard-props provider (hooks become `use<Name>`
    * selector hooks on the render side; props spread verbatim).
    * @param descriptor - static member roster plus per-session resolver.

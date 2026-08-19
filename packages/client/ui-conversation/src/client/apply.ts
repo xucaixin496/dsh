@@ -423,25 +423,19 @@ export function apply(ctx: Context): void {
             })
         },
         resendAt: async (seq, text) => {
-          try {
-            const childId = await sessions.fork({ sessionId, beforeTurnSeq: seq, increaseTitle: true })
-            // Admit the edited/resent text before switching, so the branch
-            // opens with the message already queued. A rejected prompt still
-            // opens the branch and surfaces through the child's promptError.
-            const child = sessions.binding(childId)?.session
-            if (child !== undefined) {
-              const admitted = await child.prompt([{ type: 'text', text }], 'queue')
-              if (!admitted.ok) {
-                console.error(`resend prompt rejected: ${admitted.error.code}: ${admitted.error.message}`)
-              }
-            }
-            sessions.open(childId)
-            return true
-          } catch (error) {
-            // Fork or child-rename failure keeps the source view untouched.
-            console.error('resend failed', error)
-            return false
+          // Regenerate in place: the host shadows the anchored message's turn
+          // and everything after it on the model surface, then re-runs the
+          // message (or its edited text) as the next turn in this SAME
+          // session — no branch is created.
+          const result = await sessions.regenerate({
+            sessionId,
+            atSeq: seq,
+            ...(text === undefined ? {} : { text }),
+          })
+          if (!result.ok) {
+            console.error(`regenerate rejected: ${result.error.code}: ${result.error.message}`)
           }
+          return result.ok
         },
       }
     },

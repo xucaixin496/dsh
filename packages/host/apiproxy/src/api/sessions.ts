@@ -353,6 +353,19 @@ export interface SessionsApi {
   Promise<RpcResponse<{ sessionId: SessionId }>>
 
   /**
+   * Re-runs one user message in place: the surface range from the anchored
+   * `user/message` through the last surface node is shadowed by a replacement
+   * `user/message` (the same content, or `text` when the user edited it), and
+   * the agent answers it as the next turn in the SAME session. The append-only
+   * log is untouched; the rollback is a surface rewrite, so nothing before the
+   * anchored message is affected and the session list never grows a branch.
+   * The session must be idle: a running turn is rejected with `agent-busy`, as
+   * is an anchor that is no longer a live surface node (already regenerated).
+   */
+  regenerate(request: RpcRequest<{ sessionId: SessionId; atSeq: number; text?: string }>):
+  Promise<RpcResponse<{ accepted: true }>>
+
+  /**
    * Sends text and temporary image bytes to an ordinary session Agent after durable host admission.
    * Browser callers attach their current IANA zone;
    * the Host validates, canonicalizes, and records it on that exact user message. Omission remains

@@ -372,13 +372,14 @@ export interface ChatNodeOwnerProps {
   inspectCall: (callId: CallId) => void
   forkAt: (seq: number) => void
   /**
-   * Re-run a user message from its turn's start: fork a child session that
-   * ends before the turn containing `seq`, open it, and send `text` there.
-   * Resolves when the edited/resend prompt has been admitted. Resolves
-   * `false` when the fork failed (the source view stays untouched), so an
-   * in-bubble editor can keep its draft for a retry.
+   * Re-run a user message in place: the host shadows the anchored message's
+   * turn and everything after it on the model surface, then answers the
+   * replacement message (`text`, or the original content when omitted) as the
+   * next turn in this SAME session — no branch is created. Resolves `false`
+   * when the host rejected the regenerate (e.g. the session is running), so
+   * an in-bubble editor can keep its draft for a retry.
    */
-  resendAt: (seq: number, text: string) => Promise<boolean>
+  resendAt: (seq: number, text?: string) => Promise<boolean>
   /** Resolve a session-authorized historical image for inline display. */
   loadImage: (attachment: ImageAttachmentRef) => Promise<string>
   /** Resolve a session-authorized historical file for download. */
@@ -721,12 +722,12 @@ export interface ChatViewInjected {
   /** Fork through the completed turn ending at the eligible message `seq`, then open the child. */
   forkAt: (seq: number) => void
   /**
-   * Fork a child session that ends before the turn containing the user
-   * message `seq`, open it, and resend `text` there (edit-and-resend /
-   * regenerate path). Resolves `false` when the fork failed, keeping the
-   * source view untouched.
+   * Re-run the user message at `seq` in place: the host shadows its turn and
+   * everything after it, then re-answers the message (`text`, or the original
+   * content when omitted) in this same session. Resolves `false` when the host
+   * rejected the regenerate, keeping the source view untouched.
    */
-  resendAt: (seq: number, text: string) => Promise<boolean>
+  resendAt: (seq: number, text?: string) => Promise<boolean>
   /**
    * Prose file-mention vocabulary for one closing message, from the optional
    * {@link ChatFileMentions} service (resolved lazily per call, so composing
