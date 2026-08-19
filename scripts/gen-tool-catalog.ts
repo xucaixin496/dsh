@@ -25,7 +25,15 @@ import { PwshLocalExecutor } from '@deepseek-ai/dsh-pwsh-local'
 import LocalSubprocessRuntime from '@deepseek-ai/dsh-subprocess-local'
 import LocalFileSystem from '@deepseek-ai/dsh-fs-local'
 import { AttachmentStore } from '@deepseek-ai/dsh-attachment'
-import type { ImageAttachmentLimits, ImageAttachmentRef, SaveImageAttachment, StoredImageAttachment } from '@deepseek-ai/dsh-attachment'
+import type {
+  FileAttachmentLimits,
+  FileAttachmentRef,
+  ImageAttachmentLimits,
+  ImageAttachmentRef,
+  SaveImageAttachment,
+  StoredFileAttachment,
+  StoredImageAttachment,
+} from '@deepseek-ai/dsh-attachment'
 import UserQuestionService from '@deepseek-ai/dsh-user-questions'
 import PlanModeController from '@deepseek-ai/dsh-plan-mode'
 import WebRuntime from '@deepseek-ai/dsh-web'
@@ -74,6 +82,23 @@ class CatalogAttachmentStore extends AttachmentStore {
     maxImagePixels: 1,
     mediaTypes: Object.freeze(['image/png'] as const),
   })
+  override readonly fileLimits: FileAttachmentLimits = Object.freeze({
+    maxFileBytes: 1,
+    maxFilesPerMessage: 1,
+    maxMessageFileBytes: 1,
+  })
+
+  override validateFile(): Promise<void> {
+    return Promise.reject(new Error('gen-tool-catalog: file validation is unreachable during schema harvest'))
+  }
+
+  override saveFile(): Promise<FileAttachmentRef> {
+    return Promise.reject(new Error('gen-tool-catalog: file writes are unreachable during schema harvest'))
+  }
+
+  override readFile(): Promise<StoredFileAttachment> {
+    return Promise.reject(new Error('gen-tool-catalog: file reads are unreachable during schema harvest'))
+  }
 
   override validateImage(_input: SaveImageAttachment): Promise<void> {
     return Promise.reject(new Error('gen-tool-catalog: attachment validation is unreachable during schema harvest'))

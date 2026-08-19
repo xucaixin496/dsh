@@ -1,0 +1,40 @@
+/* Updater row inside the General settings section. */
+
+.card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-width: 560px;
+  padding: 12px 14px;
+  border: 1px solid var(--dsw-alias-border-l2-darkmode-thin, rgba(127, 127, 127, 0.22));
+  border-radius: 12px;
+  background: var(--dsw-specific-input-major, var(--dsw-alias-surface-2, rgba(127, 127, 127, 0.08)));
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.label {
+  flex: none;
+  color: var(--dsw-alias-label-secondary, inherit);
+  font-size: 13px;
+}
+
+.repo {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--dsw-alias-label-primary, inherit);
+  font-family: var(--ds-font-family-code, monospace);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.status {
+  color: var(--dsw-alias-label-tertiary, inherit);
+  font-size: 12px;
+  line-height: 18px;
+}

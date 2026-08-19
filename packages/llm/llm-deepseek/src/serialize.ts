@@ -7,7 +7,7 @@
  * @module dsh-llm-deepseek/serialize
  */
 
-import { contentHasImage, LlmError } from '@deepseek-ai/dsh-llm'
+import { contentHasImage, fileBlockText, LlmError } from '@deepseek-ai/dsh-llm'
 import type { ContentBlock, GenerateOptions, Message } from '@deepseek-ai/dsh-llm'
 import type { WireMessage, WireRequest, WireTool } from './types.ts'
 
@@ -52,16 +52,25 @@ function resolveThinking(options: GenerateOptions, defaults: RequestDefaults): R
   return defaults.thinking === undefined ? {} : { thinking: defaults.thinking }
 }
 
-/** Join the text blocks of a message (used for user/tool-result content). */
+/**
+ * Join the text-bearing blocks of a message (used for user/tool-result
+ * content). File blocks project their metadata header plus any server-side
+ * extracted text, so attachments survive the text-only wire as readable text.
+ */
 function flattenText(blocks: ContentBlock[]): string {
-  return blocks
-    .filter(block => block.type === 'text')
-    .map(block => block.text)
-    .join('')
+  const parts: string[] = []
+  for (const block of blocks) {
+    if (block.type === 'text' && block.text.length > 0) parts.push(block.text)
+    else if (block.type === 'file') parts.push(fileBlockText(block))
+  }
+  return parts.join('')
 }
 
-/** Reject core image content before any text-flattening path can silently erase it. */
-function assertTextOnly(blocks: readonly ContentBlock[]): void {
+/**
+ * Reject core image content before any text-flattening path can silently
+ * erase it. File blocks are admitted: flattenText renders their projection.
+ */
+function assertTextCompatible(blocks: readonly ContentBlock[]): void {
   if (contentHasImage(blocks)) {
     throw new LlmError('The DeepSeek chat-completions adapter does not support image content.', 'UNSUPPORTED_CONTENT')
   }
@@ -112,7 +121,7 @@ function serializeAssistant(message: Message): WireMessage {
 export function serializeMessages(messages: Message[]): WireMessage[] {
   const wire: WireMessage[] = []
   for (const message of messages) {
-    assertTextOnly(message.content)
+    assertTextCompatible(message.content)
     if (message.role === 'system') {
       wire.push({ role: 'system', content: flattenText(message.content) })
       continue

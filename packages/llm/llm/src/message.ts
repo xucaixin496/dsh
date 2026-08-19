@@ -140,6 +140,17 @@ export interface Message {
 /** A user-role specialization of the one shared message representation. */
 export interface UserMessage extends Message {
   readonly role: 'user'
+  /**
+   * Host-only admission metadata consumed by the agent loop when this message
+   * is appended: a present value lands the `user/message` event as a surface
+   * REPLACEMENT (shadowing the surface range `[start..end]`) instead of an
+   * append, so a regenerate/rewrite can roll the model context back to an
+   * earlier point without touching the append-only log. Never part of the
+   * durable message projection.
+   */
+  readonly surfaceReplace?: { readonly start: number; readonly end: number }
+  /** Host-only: surface node seqs shadowed by `surfaceReplace`; validated by Session.append. */
+  readonly surfaceSourceSeqs?: readonly number[]
 }
 
 /** A model-produced assistant specialization of the shared message representation. */

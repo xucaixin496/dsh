@@ -5,7 +5,14 @@
  */
 
 import type { MessageId } from '@deepseek-ai/dsh-llm/brand'
-import type { AttachmentIdType, ImageAttachmentLimits, ImageAttachmentRef, ImageMediaType } from '@deepseek-ai/dsh-attachment'
+import type {
+  AttachmentIdType,
+  FileAttachmentLimits,
+  FileAttachmentRef,
+  ImageAttachmentLimits,
+  ImageAttachmentRef,
+  ImageMediaType,
+} from '@deepseek-ai/dsh-attachment'
 import type { ContentBlock } from '@deepseek-ai/dsh-llm/types'
 import type { SessionEvent, SessionId } from '@deepseek-ai/dsh-session/types'
 // The pure-type outlet: api/ is browser-importable, and the package root's
@@ -32,6 +39,7 @@ declare module '@deepseek-ai/dsh-session-projection/types' {
      * composed — clients skip the pre-check and let the host answer.
      */
     imageLimits: ImageAttachmentLimits
+    fileLimits: FileAttachmentLimits
   }
 }
 
@@ -87,6 +95,7 @@ export interface SessionProjectionsBlock {
 export type PromptContentPart =
   | { type: 'text'; text: string }
   | { type: 'image'; mediaType: ImageMediaType; data: string; name?: string }
+  | { type: 'file'; mediaType: string; data: string; name?: string }
 
 /** Complete model selection for one session. */
 export interface ModelSelection {
@@ -333,9 +342,36 @@ export interface SessionsApi {
    * without acquiring an Agent. Workspace attachment follows the source
    * directly, or the nearest workspace-owning ancestor when the source is a
    * subagent.
+   *
+   * `beforeTurnSeq` instead cuts EXCLUSIVELY: the child seed ends before the
+   * turn containing that anchor event (the anchor's own turn is dropped so a
+   * resend/edit can re-run it with new input). An anchor before any turn
+   * forks an empty child; an anchor past the log end fails with
+   * `fork-unavailable`. `atSeq` and `beforeTurnSeq` are mutually exclusive.
    */
-  fork(request: RpcRequest<{ sessionId: SessionId; atSeq?: number }>):
+  fork(request: RpcRequest<{ sessionId: SessionId; atSeq?: number; beforeTurnSeq?: number }>):
   Promise<RpcResponse<{ sessionId: SessionId }>>
+
+  /**
+   * Re-runs one user message in place: the surface range from the anchored
+   * `user/message` through the last surface node is shadowed by a replacement
+   * `user/message` (the same content, or `text` when the user edited it), and
+   * the agent answers it as the next turn in the SAME session. The append-only
+   * log is untouched; the rollback is a surface rewrite, so nothing before the
+   * anchored message is affected and the session list never grows a branch.
+   * The session must be idle: a running turn is rejected with `agent-busy`, as
+   * is an anchor that is no longer a live surface node (already regenerated).
+   */
+  regenerate(request: RpcRequest<{
+    sessionId: SessionId
+    atSeq: number
+    text?: string
+    /** Attachment ids to drop from the re-run (X'd in the edit UI). */
+    removeAttachmentIds?: string[]
+    /** New image/file uploads to add to the re-run, in the prompt wire shape. */
+    additions?: PromptContentPart[]
+  }>):
+  Promise<RpcResponse<{ accepted: true }>>
 
   /**
    * Sends text and temporary image bytes to an ordinary session Agent after durable host admission.
@@ -352,9 +388,9 @@ export interface SessionsApi {
   }>):
   Promise<RpcResponse<{ accepted: true; command?: { kind: 'success'; text?: string } }>>
 
-  /** Reads one durable image after proving that this session's log references its id. */
+  /** Reads one durable image or file after proving that this session's log references its id. */
   attachment(request: RpcRequest<{ sessionId: SessionId; attachmentId: AttachmentIdType }>):
-  Promise<RpcResponse<{ attachment: ImageAttachmentRef; data: string }>>
+  Promise<RpcResponse<{ attachment: ImageAttachmentRef | FileAttachmentRef; data: string }>>
 
   /**
    * Edits, removes, or strictly steers one pending queued occurrence on an ordinary session.

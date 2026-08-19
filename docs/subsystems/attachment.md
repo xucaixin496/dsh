@@ -119,7 +119,31 @@ abstract saveImage(input: SaveImageAttachment): Promise<ImageAttachmentRef>
  * @throws the signal reason when aborted, or a storage error when verification fails.
  */
 abstract readImage(ref: ImageAttachmentRef, signal?: AbortSignal): Promise<StoredImageAttachment>
+
+/**
+ * Validate one non-image file without persisting it.
+ * Batch callers validate every member before saving any member.
+ * @param _input - encoded bytes, declared media type, and optional display name.
+ * @returns completion after the admission policy has been applied.
+ */
+validateFile(_input: SaveFileAttachment): Promise<void>
+
+/**
+ * Validate and durably commit one non-image file before its owning session event is appended.
+ * @param _input - encoded bytes, declared media type, and optional display name.
+ * @returns a durable content-addressed reference.
+ */
+saveFile(_input: SaveFileAttachment): Promise<FileAttachmentRef>
+
+/**
+ * Read one non-image file and verify that bytes still match the recorded reference.
+ * @param _ref - durable reference from the session log.
+ * @param _signal - optional cancellation for backend read and verification work.
+ * @returns the verified bytes and canonical reference.
+ * @throws the signal reason when aborted, or a storage error when verification fails.
+ */
+readFile(_ref: FileAttachmentRef, _signal?: AbortSignal): Promise<StoredFileAttachment>
 ```
 
-Source: [`packages/attachment/attachment/src/index.ts:31`](../../packages/attachment/attachment/src/index.ts)
+Source: [`packages/attachment/attachment/src/index.ts:42`](../../packages/attachment/attachment/src/index.ts)
 <!-- END GENERATED cordis-surface -->

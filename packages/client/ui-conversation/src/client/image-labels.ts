@@ -3,9 +3,9 @@
  * application state; owners resolve every string). */
 
 import type {
-  AttachmentRailLabels, DropOverlayLabels, ImageLightboxLabels, MessageImageLabels,
+  AttachmentRailLabels, DropOverlayLabels, FileChipLabels, ImageLightboxLabels, MessageImageLabels,
 } from '@deepseek-ai/dsh-client-ui-attachment'
-import type { ImageAttachmentLimits } from '@deepseek-ai/dsh-attachment'
+import type { FileAttachmentLimits, ImageAttachmentLimits } from '@deepseek-ai/dsh-attachment'
 import type { Translate } from '@deepseek-ai/dsh-client-ui-slots'
 import type { ConversationKey } from './locales.ts'
 
@@ -33,6 +33,7 @@ export function attachmentErrorText(
   t: Translate<ConversationKey>,
   reason: string,
   limits?: ImageAttachmentLimits,
+  fileLimits?: FileAttachmentLimits,
 ): string {
   switch (reason) {
     case 'MODEL_DOES_NOT_SUPPORT_IMAGES': return t('image.modelUnsupported')
@@ -51,6 +52,18 @@ export function attachmentErrorText(
       break
     case 'IMAGES_TOO_LARGE':
       if (limits !== undefined) return t('image.totalTooLarge', { size: imageSizeText(limits.maxMessageImageBytes) })
+      break
+    case 'FILE_DENIED_MEDIA_TYPE':
+    case 'INVALID_FILE':
+      return t('file.unsupportedType')
+    case 'TOO_MANY_FILES':
+      if (fileLimits !== undefined) return t('file.tooMany', { count: fileLimits.maxFilesPerMessage })
+      break
+    case 'FILE_TOO_LARGE':
+      if (fileLimits !== undefined) return t('file.fileTooLarge', { size: imageSizeText(fileLimits.maxFileBytes) })
+      break
+    case 'FILES_TOO_LARGE':
+      if (fileLimits !== undefined) return t('file.totalTooLarge', { size: imageSizeText(fileLimits.maxMessageFileBytes) })
       break
     default: break
   }
@@ -80,6 +93,15 @@ export function messageImageLabels(t: Translate<ConversationKey>): MessageImageL
     loadFailed: t('image.loadFailed'),
     lightbox: lightboxLabels(t),
   }
+}
+
+/**
+ * Resolve the chat-history file-attachment strings.
+ * @param t - the conversation-namespace translate.
+ * @returns the file-chip download label.
+ */
+export function messageFileLabels(t: Translate<ConversationKey>): FileChipLabels {
+  return { download: t('file.download') }
 }
 
 /**

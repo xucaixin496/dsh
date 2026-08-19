@@ -9,12 +9,17 @@ import {
   AttachmentId,
 } from '@deepseek-ai/dsh-attachment'
 import type {
+  FileAttachmentLimits,
+  FileAttachmentRef,
   ImageAttachmentLimits,
   ImageAttachmentRef,
+  SaveFileAttachment,
   SaveImageAttachment,
+  StoredFileAttachment,
   StoredImageAttachment,
 } from '@deepseek-ai/dsh-attachment'
 import { detectImage, probeImage } from './image.ts'
+import { assertFilePolicy } from './media.ts'
 
 const ID_PATTERN = /^sha256:([a-f0-9]{64})$/
 const durableHomes = new Set<string>()
@@ -37,7 +42,7 @@ function objectPath(root: string, sha256: string): string {
   return join(root, 'objects', sha256.slice(0, 2), sha256)
 }
 
-function ensureReference(ref: ImageAttachmentRef): string {
+function ensureReference(ref: { attachmentId: unknown }): string {
   const match = ID_PATTERN.exec(String(ref.attachmentId))
   if (match?.[1] === undefined) throw new AttachmentError('Attachment reference is invalid.', 'INVALID_ATTACHMENT_REF')
   return match[1]
@@ -127,16 +132,16 @@ async function ensureDurableHome(path: string): Promise<string> {
 }
 
 /**
- * Save and verify immutable image bytes below a versioned attachment root.
+ * Persist bytes content-addressed below a versioned attachment root and
+ * return their sha256 digest. Publication is atomic (link into an
+ * immutable object path) and the object directory is made durable before the
+ * digest can reach a session checkpoint.
  * @param root - absolute `DSH_HOME/attachments/v1` root.
- * @param input - encoded bytes and declared metadata.
- * @param limits - resolved storage policy.
- * @returns durable content-addressed reference.
+ * @param data - validated bytes to persist.
+ * @returns the sha256 hex digest used as the content address.
  */
-export async function saveImageFile(root: string, input: SaveImageAttachment, limits: ImageAttachmentLimits): Promise<ImageAttachmentRef> {
-  if (input.data.byteLength > limits.maxImageBytes) throw new AttachmentError('Image exceeds the configured byte limit.', 'IMAGE_TOO_LARGE')
-  const metadata = await inspectMetadata(input.data, input.mediaType, limits.maxImagePixels)
-  const sha256 = digest(input.data)
+async function persistObject(root: string, data: Uint8Array): Promise<string> {
+  const sha256 = digest(data)
   const bucket = join(root, 'objects', sha256.slice(0, 2))
   const staging = join(root, 'tmp')
   // Establish DSH_HOME itself against the filesystem root once per process.
@@ -150,7 +155,7 @@ export async function saveImageFile(root: string, input: SaveImageAttachment, li
   let handle
   try {
     handle = await open(temporary, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY, 0o600)
-    await handle.writeFile(input.data)
+    await handle.writeFile(data)
     await handle.sync()
     await handle.close()
     handle = undefined
@@ -183,8 +188,46 @@ export async function saveImageFile(root: string, input: SaveImageAttachment, li
       },
     )
     if (error instanceof AttachmentError) throw error
-    throw new AttachmentError('Unable to persist image attachment.', 'ATTACHMENT_WRITE_FAILED', { cause: error })
+    throw new AttachmentError('Unable to persist attachment.', 'ATTACHMENT_WRITE_FAILED', { cause: error })
   }
+  return sha256
+}
+
+/**
+ * Read one content-addressed object and verify that the stored bytes still
+ * match the recorded digest.
+ * @param root - absolute `DSH_HOME/attachments/v1` root.
+ * @param sha256 - content address recorded in the reference.
+ * @param signal - optional cancellation for filesystem work.
+ * @returns verified bytes.
+ * @throws the signal reason when aborted, or an AttachmentError when verification fails.
+ */
+async function readObjectBytes(root: string, sha256: string, signal?: AbortSignal): Promise<Uint8Array> {
+  signal?.throwIfAborted()
+  let data: Uint8Array
+  try {
+    data = new Uint8Array(await readFile(objectPath(root, sha256), { signal }))
+  } catch (error) {
+    signal?.throwIfAborted()
+    if (error instanceof Error && 'code' in error && error.code === 'ENOENT') throw new AttachmentError('Attachment object is missing.', 'ATTACHMENT_NOT_FOUND')
+    throw new AttachmentError('Unable to read attachment.', 'ATTACHMENT_READ_FAILED', { cause: error })
+  }
+  signal?.throwIfAborted()
+  if (digest(data) !== sha256) throw new AttachmentError('Stored attachment failed integrity verification.', 'ATTACHMENT_CORRUPT')
+  return data
+}
+
+/**
+ * Save and verify immutable image bytes below a versioned attachment root.
+ * @param root - absolute `DSH_HOME/attachments/v1` root.
+ * @param input - encoded bytes and declared metadata.
+ * @param limits - resolved storage policy.
+ * @returns durable content-addressed reference.
+ */
+export async function saveImageFile(root: string, input: SaveImageAttachment, limits: ImageAttachmentLimits): Promise<ImageAttachmentRef> {
+  if (input.data.byteLength > limits.maxImageBytes) throw new AttachmentError('Image exceeds the configured byte limit.', 'IMAGE_TOO_LARGE')
+  const metadata = await inspectMetadata(input.data, input.mediaType, limits.maxImagePixels)
+  const sha256 = await persistObject(root, input.data)
   const name = displayName(input.name)
   return {
     attachmentId: AttachmentId(`sha256:${sha256}`),
@@ -206,18 +249,8 @@ export async function readImageFile(
   ref: ImageAttachmentRef,
   signal?: AbortSignal,
 ): Promise<StoredImageAttachment> {
-  signal?.throwIfAborted()
   const sha256 = ensureReference(ref)
-  let data: Uint8Array
-  try {
-    data = new Uint8Array(await readFile(objectPath(root, sha256), { signal }))
-  } catch (error) {
-    signal?.throwIfAborted()
-    if (error instanceof Error && 'code' in error && error.code === 'ENOENT') throw new AttachmentError('Attachment object is missing.', 'ATTACHMENT_NOT_FOUND')
-    throw new AttachmentError('Unable to read image attachment.', 'ATTACHMENT_READ_FAILED', { cause: error })
-  }
-  signal?.throwIfAborted()
-  if (digest(data) !== sha256) throw new AttachmentError('Stored attachment failed integrity verification.', 'ATTACHMENT_CORRUPT')
+  const data = await readObjectBytes(root, sha256, signal)
   // The digest proves these are the exact bytes admission fully decoded, so
   // the read path only re-derives the header fields (no raster decode, no
   // per-request pixel amplification on history replay).
@@ -225,6 +258,61 @@ export async function readImageFile(
   signal?.throwIfAborted()
   if (metadata.mediaType !== ref.mediaType || data.byteLength !== ref.bytes
     || metadata.width !== ref.width || metadata.height !== ref.height) {
+    throw new AttachmentError('Stored attachment metadata does not match its reference.', 'ATTACHMENT_CORRUPT')
+  }
+  return { ref, data }
+}
+
+/**
+ * Run the full admission policy for one non-image file without touching storage.
+ * @param input - encoded bytes and declared metadata.
+ * @param limits - resolved storage policy.
+ * @returns completion after the policy has been applied.
+ */
+export async function validateFileFile(input: SaveFileAttachment, limits: FileAttachmentLimits): Promise<void> {
+  assertFilePolicy(input, limits)
+}
+
+/**
+ * Save and verify immutable non-image file bytes below a versioned attachment root.
+ * @param root - absolute `DSH_HOME/attachments/v1` root.
+ * @param input - encoded bytes and declared metadata.
+ * @param limits - resolved storage policy.
+ * @returns durable content-addressed reference.
+ */
+export async function saveFileFile(root: string, input: SaveFileAttachment, limits: FileAttachmentLimits): Promise<FileAttachmentRef> {
+  assertFilePolicy(input, limits)
+  const sha256 = await persistObject(root, input.data)
+  const name = displayName(input.name)
+  return {
+    attachmentId: AttachmentId(`sha256:${sha256}`),
+    mediaType: input.mediaType.trim() === '' ? 'application/octet-stream' : input.mediaType,
+    bytes: input.data.byteLength,
+    ...(name !== undefined ? { name } : {}),
+  }
+}
+
+/**
+ * Read and verify one content-addressed non-image file.
+ * @param root - absolute `DSH_HOME/attachments/v1` root.
+ * @param ref - reference recorded in the session log.
+ * @param signal - optional cancellation for filesystem and verification work.
+ * @returns verified bytes and reference.
+ * @throws the signal reason when aborted, or an AttachmentError when verification fails.
+ */
+export async function readFileFile(
+  root: string,
+  ref: FileAttachmentRef,
+  signal?: AbortSignal,
+): Promise<StoredFileAttachment> {
+  signal?.throwIfAborted()
+  const sha256 = ensureReference(ref)
+  const data = await readObjectBytes(root, sha256, signal)
+  signal?.throwIfAborted()
+  // Media type is declared policy metadata (not derivable from every byte
+  // stream), so byte length is the re-derivable field; the digest already
+  // proves content identity.
+  if (data.byteLength !== ref.bytes) {
     throw new AttachmentError('Stored attachment metadata does not match its reference.', 'ATTACHMENT_CORRUPT')
   }
   return { ref, data }

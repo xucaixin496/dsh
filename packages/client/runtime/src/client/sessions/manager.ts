@@ -9,6 +9,7 @@ import type {
 // Value import from the inline-safe wire layer (not the connection plugin):
 // plugin-to-plugin value imports are a bundle purity error.
 import { transportError } from '@deepseek-ai/dsh-host-apiproxy/api'
+import type { PromptContentPart } from '@deepseek-ai/dsh-host-apiproxy/api'
 import { mergeOrderedBaseline } from '../ordered-baseline.ts'
 import type { ConversationRuntime } from './conversation-assembler.ts'
 import type { SessionListEntry, TitledSessionSummary } from './lineage.ts'
@@ -578,13 +579,14 @@ export class SessionManager {
    * @returns the fork result (the child session id).
    */
   async fork(
-    opts: { sessionId: SessionId; atSeq?: number },
+    opts: { sessionId: SessionId; atSeq?: number; beforeTurnSeq?: number },
   ): Promise<RpcResult<{ sessionId: SessionId }>> {
     try {
       const source = this.summaries.find(s => s.sessionId === opts.sessionId)
       const { result } = await this.api.sessions.fork({
         sessionId: opts.sessionId,
         ...opts.atSeq === undefined ? {} : { atSeq: opts.atSeq },
+        ...opts.beforeTurnSeq === undefined ? {} : { beforeTurnSeq: opts.beforeTurnSeq },
       })
       const childId = result.ok
         ? result.value.sessionId
@@ -596,6 +598,39 @@ export class SessionManager {
           ...(source?.cwd !== undefined ? { cwd: source.cwd } : {}),
         } })
       }
+      return result
+    } catch (error) {
+      return transportError(error)
+    }
+  }
+
+  /**
+   * Contract session.regenerate: re-run the anchored user message in place.
+   * The host shadows that message's turn and everything after it on the model
+   * surface, then answers the replacement message as the next turn in this
+   * same session — no branch is created.
+   * @param opts - session, the anchored user-message seq, and optional edited text.
+   * @returns the regenerate result.
+   */
+  async regenerate(
+    opts: {
+      sessionId: SessionId
+      atSeq: number
+      text?: string
+      removeAttachmentIds?: string[]
+      additions?: PromptContentPart[]
+    },
+  ): Promise<RpcResult<{ accepted: true }>> {
+    try {
+      const { result } = await this.api.sessions.regenerate({
+        sessionId: opts.sessionId,
+        atSeq: opts.atSeq,
+        ...(opts.text === undefined ? {} : { text: opts.text }),
+        ...(opts.removeAttachmentIds === undefined || opts.removeAttachmentIds.length === 0
+          ? {} : { removeAttachmentIds: opts.removeAttachmentIds }),
+        ...(opts.additions === undefined || opts.additions.length === 0
+          ? {} : { additions: opts.additions }),
+      })
       return result
     } catch (error) {
       return transportError(error)

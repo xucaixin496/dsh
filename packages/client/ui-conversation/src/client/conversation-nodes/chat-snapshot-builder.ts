@@ -3,7 +3,7 @@ import type {
   ChatConversationViewNode, ChatLocationNodeIndex, ChatNodeStore, ChatSnapshot,
   ConversationLocation, ConversationNode, ConversationTimelineSnapshot,
   ConversationViewBuilder, ConversationViewDefinition, LegacyConversationSlice,
-  PartialAssistant, RunningToolCall,
+  PartialAssistant, RunningToolCall, UserMessageNode,
 } from '@deepseek-ai/dsh-client-runtime/client'
 import type { ChatNode } from '../contract/chat-nodes.ts'
 import { isRunningTool } from '../contract/chat-nodes.ts'
@@ -132,9 +132,18 @@ function locationCoordinates(location: ConversationLocation): { turn?: number; s
   return {}
 }
 
-function orderedVisible(nodes: readonly ChatConversationViewNode[]): ChatConversationViewNode[] {
+function orderedVisible(
+  nodes: readonly ChatConversationViewNode[],
+  shadowedSeqs: ReadonlySet<number>,
+  hiddenTurns: ReadonlySet<number>,
+): ChatConversationViewNode[] {
   return nodes
-    .filter(node => node.visibility === 'visible')
+    .filter((node) => {
+      const turn = locationCoordinates(node.location).turn
+      return node.visibility === 'visible'
+        && !shadowedSeqs.has(node.anchorSeq)
+        && (turn === undefined || !hiddenTurns.has(turn))
+    })
     .sort((left, right) => left.anchorSeq - right.anchorSeq || left.key.localeCompare(right.key))
 }
 
@@ -384,6 +393,8 @@ export class ChatSnapshotBuilder implements ConversationViewBuilder<ChatConversa
   private readonly store = new MutableChatNodeStore()
   private readonly locations = new MutableChatLocationIndex()
   private readonly legacy = new LegacySliceBuilder()
+  private shadowedSeqs = new Set<number>()
+  private hiddenTurns = new Set<number>()
   private order: readonly string[] = EMPTY_KEYS
   readonly empty: ChatSnapshot
 
@@ -391,12 +402,44 @@ export class ChatSnapshotBuilder implements ConversationViewBuilder<ChatConversa
     this.empty = this.snapshot({ turnOrder: EMPTY_TURNS, turns: new Map() })
   }
 
+  /**
+   * Refresh the regenerate rollback mask: seqs shadowed by a replacement
+   * `user` node, plus the turns those seqs belong to (from the timeline).
+   */
+  private refreshShadowed(
+    nodes: readonly ChatConversationViewNode[],
+    timeline: ConversationTimelineSnapshot,
+  ): void {
+    const shadowedSeqs = new Set<number>()
+    for (const raw of nodes) {
+      const node = raw as ChatNode
+      if (node.kind !== 'user') continue
+      const shadowed = (node.data as UserMessageNode).shadowedSeqs
+      if (shadowed === undefined) continue
+      for (const seq of shadowed) shadowedSeqs.add(seq)
+    }
+    const hiddenTurns = new Set<number>()
+    for (const seq of shadowedSeqs) {
+      for (const turn of timeline.turns.values()) {
+        const start = turn.start?.seq
+        const end = turn.end?.seq
+        if (start !== undefined && end !== undefined && start <= seq && seq <= end) {
+          hiddenTurns.add(turn.turn)
+          break
+        }
+      }
+    }
+    this.shadowedSeqs = shadowedSeqs
+    this.hiddenTurns = hiddenTurns
+  }
+
   replace(input: {
     readonly nodes: readonly ChatConversationViewNode[]
     readonly timeline: ConversationTimelineSnapshot
   }): ChatSnapshot {
     this.store.replace(input.nodes)
-    this.order = orderedVisible(input.nodes).map(node => node.key)
+    this.refreshShadowed(input.nodes, input.timeline)
+    this.order = orderedVisible(input.nodes, this.shadowedSeqs, this.hiddenTurns).map(node => node.key)
     this.locations.rebuild(this.order, this.store)
     return this.snapshot(input.timeline, this.legacy.replace(input.nodes, input.timeline))
   }
@@ -417,8 +460,9 @@ export class ChatSnapshotBuilder implements ConversationViewBuilder<ChatConversa
       if (!nodeStructural) contentOnly.push(node)
     }
     this.store.upsert(input.upserts)
+    this.refreshShadowed(this.store.values(), input.timeline)
     if (structural) {
-      const next = orderedVisible(this.store.values()).map(node => node.key)
+      const next = orderedVisible(this.store.values(), this.shadowedSeqs, this.hiddenTurns).map(node => node.key)
       this.order = sameReferences(this.order, next) ? this.order : next
       this.locations.rebuild(this.order, this.store)
     }

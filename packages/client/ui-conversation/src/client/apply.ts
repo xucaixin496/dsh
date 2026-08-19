@@ -401,6 +401,7 @@ export function apply(ctx: Context): void {
         },
         loadOlder: () => { void scoped.loadOlder() },
         loadImage: attachment => conversation.resolveImage(sessionId, attachment),
+        loadFile: attachment => conversation.resolveFile(sessionId, attachment),
         // Unregistered 'trajectory' id is safe: the tab ring falls back to
         // the first view, and the untouched inspect target stays inert.
         inspectCall: (callId) => {
@@ -420,6 +421,25 @@ export function apply(ctx: Context): void {
             .catch(() => {
               // Fork or child-rename failure keeps the source view untouched.
             })
+        },
+        resendAt: async (seq, options) => {
+          // Regenerate in place: the host shadows the anchored message's turn
+          // and everything after it on the model surface, then re-runs the
+          // message with the requested text/attachments as the next turn in
+          // this SAME session — no branch is created.
+          const result = await sessions.regenerate({
+            sessionId,
+            atSeq: seq,
+            ...(options?.text === undefined ? {} : { text: options.text }),
+            ...(options?.removeAttachmentIds === undefined || options.removeAttachmentIds.length === 0
+              ? {} : { removeAttachmentIds: [...options.removeAttachmentIds] }),
+            ...(options?.additions === undefined || options.additions.length === 0
+              ? {} : { additions: options.additions }),
+          })
+          if (!result.ok) {
+            console.error(`regenerate rejected: ${result.error.code}: ${result.error.message}`)
+          }
+          return result.ok
         },
       }
     },

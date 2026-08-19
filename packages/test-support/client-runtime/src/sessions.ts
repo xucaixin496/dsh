@@ -8,6 +8,7 @@ import type {
   SessionListState, SessionProvideDescriptor, SessionSearchResultItem, SessionSummary, SnapshotStore,
   SubagentAddress,
 } from '@deepseek-ai/dsh-client-runtime/client'
+import type { RpcResult } from '@deepseek-ai/dsh-api-remotes/client'
 // The double reports the wire schema's own search bound, like the production
 // service — a transport-varying limit would be a fiction no client can see.
 import { SESSION_SEARCH_RESULT_LIMIT } from '@deepseek-ai/dsh-host-apiproxy/api'
@@ -185,7 +186,7 @@ export class TestSessions implements ISessions {
   /** Calls observed on the service-level face, newest last. */
   readonly calls: {
     method: 'open' | 'openSubagent' | 'setSubagentCatalogOpen' | 'refreshSubagents'
-      | 'clear' | 'search' | 'fork'
+      | 'clear' | 'search' | 'fork' | 'regenerate'
     args: unknown[]
   }[] = []
 
@@ -487,6 +488,18 @@ export class TestSessions implements ISessions {
   fork(opts: { sessionId: SessionId; atSeq?: number; increaseTitle?: boolean }): Promise<SessionId> {
     this.calls.push({ method: 'fork', args: [opts] })
     return Promise.resolve(opts.sessionId)
+  }
+
+  /**
+   * Recorded regenerate stub: accepts without materializing a turn (benches
+   * proving the call flow drive the production service; this face only proves
+   * the invocation and its payload).
+   * @param opts - session id, anchored user-message seq, and optional edited text.
+   * @returns an accepted result.
+   */
+  regenerate(opts: { sessionId: SessionId; atSeq: number; text?: string }): Promise<RpcResult<{ accepted: true }>> {
+    this.calls.push({ method: 'regenerate', args: [opts] })
+    return Promise.resolve({ ok: true, value: { accepted: true } })
   }
 
   /**

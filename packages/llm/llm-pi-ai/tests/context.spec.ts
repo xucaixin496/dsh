@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { AttachmentId } from '@deepseek-ai/dsh-attachment'
-import type { AttachmentStore, ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
+import type { AttachmentStore, FileAttachmentRef, ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
 import { CallId, createMessage, createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { ContentBlock, GenerateOptions, Message } from '@deepseek-ai/dsh-llm'
 import { toPiContext } from '../src/context.ts'
@@ -159,6 +159,27 @@ describe('pi-ai request context conversion', () => {
         { role: 'assistant' },
         { role: 'toolResult', toolName: 'unknown' },
       ],
+    })
+  })
+
+  it('projects file attachment text on the durable path and keeps it in text-only flatten', async () => {
+    const fileRef: FileAttachmentRef = {
+      attachmentId: AttachmentId(`sha256:${'b'.repeat(64)}`),
+      mediaType: 'application/pdf',
+      bytes: 3,
+      name: 'a.pdf',
+    }
+    const fileBlock: ContentBlock = { type: 'file', attachment: fileRef, text: 'hello pdf' }
+    const durable = await toPiContext(request([user([fileBlock])]), attachments)
+    expect(durable.messages).toEqual([{
+      role: 'user',
+      content: `[Attachment: a.pdf (application/pdf, 3 bytes, id: sha256:${'b'.repeat(64)})]\nhello pdf`,
+      timestamp: 0,
+    }])
+    // The text-only conversion must not drop the file block either: the
+    // projection keeps metadata plus any server-side extracted text.
+    expect(toPiContext(request([user([fileBlock])]))).toMatchObject({
+      messages: [{ role: 'user', content: expect.stringContaining('hello pdf') }],
     })
   })
 

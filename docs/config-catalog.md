@@ -335,10 +335,20 @@ export interface Config {
   maxMessageImageBytes?: number
   /** Maximum intrinsic width multiplied by height accepted for one image. */
   maxImagePixels?: number
+  /** Maximum encoded bytes accepted for one generic file. */
+  maxFileBytes?: number
+  /** Maximum generic-file count accepted in one submitted message. */
+  maxFilesPerMessage?: number
+  /** Maximum aggregate generic-file bytes accepted in one submitted message. */
+  maxMessageFileBytes?: number
+  /** Optional explicit generic-file media-type allow list. */
+  allowedMediaTypes?: string[]
+  /** Generic-file media-type deny list; defaults to audio/video. */
+  denyMediaTypes?: string[]
 }
 ```
 
-Source: [`packages/attachment/attachment-local/src/index.ts:24`](../packages/attachment/attachment-local/src/index.ts)
+Source: [`packages/attachment/attachment-local/src/index.ts:39`](../packages/attachment/attachment-local/src/index.ts)
 
 <a id="deepseek-aidsh-bash-local"></a>
 
@@ -753,7 +763,7 @@ export interface Config {
 }
 ```
 
-Source: [`packages/host/apiproxy/src/index.ts:41`](../packages/host/apiproxy/src/index.ts)
+Source: [`packages/host/apiproxy/src/index.ts:43`](../packages/host/apiproxy/src/index.ts)
 
 <a id="deepseek-aidsh-host-directory-picker-browse"></a>
 
@@ -2392,7 +2402,7 @@ export interface Config {
 }
 ```
 
-Source: [`packages/fs/tool-fs/src/index.ts:25`](../packages/fs/tool-fs/src/index.ts)
+Source: [`packages/fs/tool-fs/src/index.ts:26`](../packages/fs/tool-fs/src/index.ts)
 
 <a id="deepseek-aidsh-tool-fs-search"></a>
 

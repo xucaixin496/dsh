@@ -12,12 +12,14 @@ import css from './AttachmentRail.module.css'
 export interface AttachmentRailItem {
   /** Stable identity for the React key. */
   id: string
-  /** Object or data URL rendered as the thumbnail. */
-  previewUrl: string
+  /** Object or data URL rendered as the thumbnail; absent renders a file card. */
+  previewUrl?: string
   /** Image alt text (display name with the owner's fallback applied). */
   alt: string
   /** Accessible label of the item's remove control. */
   removeLabel: string
+  /** Optional file metadata for non-image attachments. */
+  fileMeta?: { name: string; bytes: number }
 }
 
 /** Rail-level strings the owner resolves from its own locale namespace. */
@@ -42,6 +44,19 @@ function pageBehavior(): ScrollBehavior {
   // non-optional typing; the optional call keeps that lane on the default.
   // oxlint-disable-next-line typescript/no-unnecessary-condition
   return window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth'
+}
+
+/** Extension badge for a file card (mirrors the history chip badge). */
+function fileBadge(name: string): string {
+  const dot = name.lastIndexOf('.')
+  const ext = dot < 0 ? '' : name.slice(dot + 1).toUpperCase().slice(0, 4)
+  return ext === '' ? 'FILE' : ext
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }
 
 /**
@@ -172,7 +187,17 @@ export function AttachmentRail<T extends AttachmentRailItem>({ items, labels, on
               title={labels.open}
               onClick={() => { onOpen(item) }}
             >
-              <img src={item.previewUrl} alt={item.alt} />
+              {item.previewUrl !== undefined
+                ? <img src={item.previewUrl} alt={item.alt} />
+                : (
+                  <span className={css.fileCard}>
+                    <span className={css.fileBadge}>{fileBadge(item.alt)}</span>
+                    <span className={css.fileName}>{item.alt}</span>
+                    {item.fileMeta !== undefined && (
+                      <span className={css.fileSize}>{formatBytes(item.fileMeta.bytes)}</span>
+                    )}
+                  </span>
+                )}
             </button>
             <button
               type="button"

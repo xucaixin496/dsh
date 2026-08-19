@@ -23,7 +23,7 @@ import type {} from '@deepseek-ai/dsh-goal/client'
 // wire types: apiproxy's sessions contract declares it, and client-runtime's
 // api-remotes import already places it in every client program.
 import type { Translate } from '@deepseek-ai/dsh-client-ui-slots'
-import type { ComposerAttachment, ComposerBarProps } from '../contract/slots.ts'
+import type { ComposerAttachment, ComposerBarProps, ImageComposerAttachment } from '../contract/slots.ts'
 import { deriveDecorations } from '../input/decorations.ts'
 import type { DraftDecorations } from '../input/decorations.ts'
 import {
@@ -74,7 +74,7 @@ export function InputBar({
     [draftImages, input?.imageIds],
   )
   const empty = draft.trim() === '' && attachments.length === 0
-  const [preview, setPreview] = useState<ComposerAttachment | null>(null)
+  const [preview, setPreview] = useState<ImageComposerAttachment | null>(null)
   const [dragActive, setDragActive] = useState(false)
   // Transient error banner (image-intake rejections and prompt failures): the
   // seq keys the Toast so an identical repeated message restarts the
@@ -89,6 +89,7 @@ export function InputBar({
   // The deployment's image-intake limits (absent while no attachment service
   // is composed — the pre-check below then defers entirely to the host).
   const imageLimits = useProjection('imageLimits')
+  const fileLimits = useProjection('fileLimits')
   // Prompt failures are ordinary failures (no create/attach transaction exists
   // anymore): the toast announces promptError, the draft stays in the machine,
   // and the user resubmits. A remount over a session whose machine still holds
@@ -436,33 +437,48 @@ export function InputBar({
   // a projected limit is refused as a whole batch, announced immediately, and
   // never enters the rail — no more submit-time failure rolling the rail
   // back. The host enforces the same limits at submit for callers that bypass
-  // this composer.
+  // this composer. Images use the image policy; every other non-audio/video
+  // file uses the generic-file policy; audio/video is refused up front.
   const intakeImages = useCallback((files: readonly File[]): void => {
     if (addImages === undefined || files.length === 0) return
     const rejected = ((): string | null => {
-      if (imageLimits !== undefined) {
-        // Format precedes limits (DeepSeek Chat's filter order): a batch with
-        // a non-image must announce the format problem, not a count or size
-        // it could never pass anyway — addImages rejects it authoritatively.
-        if (files.some(file => !(imageLimits.mediaTypes as readonly string[]).includes(file.type))) {
-          return addImages(files)
+      if (files.some(file => file.type.startsWith('audio/') || file.type.startsWith('video/'))) {
+        return t('file.unsupportedType')
+      }
+      const imageFiles = files.filter(file => file.type.startsWith('image/'))
+      const otherFiles = files.filter(file => !file.type.startsWith('image/'))
+      if (imageFiles.length > 0 && imageLimits !== undefined) {
+        if (imageFiles.some(file => !(imageLimits.mediaTypes as readonly string[]).includes(file.type))) {
+          return addImages(imageFiles)
         }
-        if (attachments.length + files.length > imageLimits.maxImagesPerMessage) {
+        if (attachments.length + imageFiles.length > imageLimits.maxImagesPerMessage) {
           return t('image.tooMany', { count: imageLimits.maxImagesPerMessage })
         }
-        if (files.some(file => file.size > imageLimits.maxImageBytes)) {
+        const imageBytes = attachments.reduce((sum, attachment) => sum + attachment.file.size, 0)
+          + imageFiles.reduce((sum, file) => sum + file.size, 0)
+        if (imageBytes > imageLimits.maxMessageImageBytes) {
+          return t('image.totalTooLarge', { size: imageSizeText(imageLimits.maxMessageImageBytes) })
+        }
+        if (imageFiles.some(file => file.size > imageLimits.maxImageBytes)) {
           return t('image.fileTooLarge', { size: imageSizeText(imageLimits.maxImageBytes) })
         }
-        const total = attachments.reduce((sum, attachment) => sum + attachment.file.size, 0)
-          + files.reduce((sum, file) => sum + file.size, 0)
-        if (total > imageLimits.maxMessageImageBytes) {
-          return t('image.totalTooLarge', { size: imageSizeText(imageLimits.maxMessageImageBytes) })
+      }
+      if (otherFiles.length > 0 && fileLimits !== undefined) {
+        if (otherFiles.length > fileLimits.maxFilesPerMessage) {
+          return t('file.tooMany', { count: fileLimits.maxFilesPerMessage })
+        }
+        const fileBytes = otherFiles.reduce((sum, file) => sum + file.size, 0)
+        if (fileBytes > fileLimits.maxMessageFileBytes) {
+          return t('file.totalTooLarge', { size: imageSizeText(fileLimits.maxMessageFileBytes) })
+        }
+        if (otherFiles.some(file => file.size > fileLimits.maxFileBytes)) {
+          return t('file.fileTooLarge', { size: imageSizeText(fileLimits.maxFileBytes) })
         }
       }
       return addImages(files)
     })()
     if (rejected !== null) showToast(rejected)
-  }, [addImages, attachments, imageLimits, showToast, t])
+  }, [addImages, attachments, imageLimits, fileLimits, showToast, t])
 
   // Whole-page file-drop intake (DeepSeek Chat behavior): the listeners live
   // on the document so a drop anywhere over the window adds images, not only
@@ -527,8 +543,11 @@ export function InputBar({
   // zero-cordis and read no locale.
   const railItems = useMemo<ComposerRailItem[]>(() => attachments.map(attachment => ({
     id: attachment.id,
-    previewUrl: attachment.previewUrl,
+    ...attachment.kind === 'image' ? { previewUrl: attachment.previewUrl } : {},
     alt: attachment.file.name || t('image.pending'),
+    ...attachment.kind === 'file'
+      ? { fileMeta: { name: attachment.file.name, bytes: attachment.file.size } }
+      : {},
     removeLabel: t('image.remove', { name: attachment.file.name }),
     attachment,
   })), [attachments, t])
@@ -697,7 +716,9 @@ export function InputBar({
             <AttachmentRail
               items={railItems}
               labels={attachmentRailLabels(t)}
-              onOpen={(item) => { setPreview(item.attachment) }}
+              onOpen={(item) => {
+                if (item.attachment.kind === 'image') setPreview(item.attachment)
+              }}
               onRemove={(item) => { removeImage?.(item.attachment.id) }}
             />
           </div>

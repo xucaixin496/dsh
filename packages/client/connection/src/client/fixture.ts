@@ -20,7 +20,7 @@ import type {
   ToolResultMessage,
   UserMessage,
 } from '@deepseek-ai/dsh-llm'
-import type { AttachmentIdType, ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
+import type { AttachmentIdType, FileAttachmentRef, ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
 import type {
   SessionEvent,
   SessionId,
@@ -1522,7 +1522,7 @@ function createFixtureWorld(options: FixtureOptions): FixtureWorld {
     session.sessionId,
     { provider: 'deepseek-official', model: 'deepseek-v4-flash' },
   ]))
-  const attachments = new Map<string, { attachment: ImageAttachmentRef; data: string }>([[
+  const attachments = new Map<string, { attachment: ImageAttachmentRef | FileAttachmentRef; data: string }>([[
     String(FIXTURE_IMAGE_REF.attachmentId),
     { attachment: FIXTURE_IMAGE_REF, data: FIXTURE_IMAGE_DATA },
   ]])
@@ -2358,6 +2358,52 @@ function createFixtureWorld(options: FixtureOptions): FixtureWorld {
         }
         return ok(request, { sessionId: child.sessionId })
       },
+      regenerate: (request) => {
+        const { sessionId, atSeq, text } = request.payload
+        const summary = summaryOf(sessionId)
+        if (summary === undefined) {
+          return err(request, {
+            code: 'session-not-found',
+            message: `no session ${sessionId}`,
+            details: { sessionId },
+          })
+        }
+        const log = logOf(sessionId)
+        const nodes = foldSurface(log).nodes
+        const startIndex = nodes.indexOf(atSeq)
+        if (startIndex === -1) {
+          return err(request, {
+            code: 'invalid-request',
+            message: `message ${String(atSeq)} is no longer on the live surface`,
+            details: {},
+          })
+        }
+        const start = nodes[startIndex]
+        const end = nodes[nodes.length - 1]
+        if (start === undefined || end === undefined) {
+          return err(request, { code: 'internal', message: 'fixture regenerate: empty surface', details: {} })
+        }
+        const target = log[atSeq]
+        const original = target?.type === 'user/message' ? target.data : undefined
+        const content: ContentBlock[] = text === undefined
+          ? original?.content ?? []
+          : [
+              ...(text === '' ? [] : [{ type: 'text' as const, text }]),
+              ...(original?.content.filter(block => block.type !== 'text') ?? []),
+            ]
+        if (content.length === 0) {
+          return err(request, { code: 'invalid-request', message: 'regenerate requires non-empty content', details: {} })
+        }
+        // Mirror the host surface rewrite: the replacement user/message shadows
+        // the anchored range and becomes the new surface tail.
+        append(sessionId, {
+          type: 'user/message',
+          data: userMessage(content),
+          surfaceOp: { op: 'replace', start, end },
+          sourceEventSeqs: nodes.slice(startIndex),
+        })
+        return ok(request, { accepted: true as const })
+      },
       history: async (request) => {
         const log = logs.get(request.payload.sessionId) ?? []
         // Snapshot at request time, deliver after the transit delay (mirrors a real host under latency).
@@ -2414,6 +2460,20 @@ function createFixtureWorld(options: FixtureOptions): FixtureWorld {
         const userText = content.map(b => (b.type === 'text' ? b.text : '')).join('')
         const durable: ContentBlock[] = content.map((block) => {
           if (block.type === 'text') return block
+          if (block.type === 'file') {
+            const attachment: FileAttachmentRef = {
+              attachmentId: `fixture:${randomUuid()}` as AttachmentIdType,
+              mediaType: block.mediaType,
+              bytes: Math.max(
+                1,
+                Math.floor(block.data.length * 3 / 4)
+                - (block.data.endsWith('==') ? 2 : block.data.endsWith('=') ? 1 : 0),
+              ),
+              ...block.name === undefined ? {} : { name: block.name },
+            }
+            attachments.set(String(attachment.attachmentId), { attachment, data: block.data })
+            return { type: 'file', attachment }
+          }
           const attachment: ImageAttachmentRef = {
             attachmentId: `fixture:${randomUuid()}` as AttachmentIdType,
             mediaType: block.mediaType,
@@ -3085,6 +3145,7 @@ export class FixtureApiClient extends AbstractApiClient {
       case 'session.selectModel': return this.api.sessions.selectModel(request)
       case 'session.rename': return this.api.sessions.rename(request)
       case 'session.fork': return this.api.sessions.fork(request)
+      case 'session.regenerate': return this.api.sessions.regenerate(request)
       case 'session.prompt': return this.api.sessions.prompt(request)
       case 'session.attachment': return this.api.sessions.attachment(request)
       case 'session.updateQueue': return this.api.sessions.updateQueue(request)

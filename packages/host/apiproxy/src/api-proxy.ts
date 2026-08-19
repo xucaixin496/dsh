@@ -10,12 +10,13 @@ import type { Context } from '@deepseek-ai/cordis'
 import { installModelSelection } from '@deepseek-ai/dsh-agent'
 import type { Agent, ModelSelection, ModelSelectionRef, AgentOptions, AgentStatus } from '@deepseek-ai/dsh-agent'
 import type {} from '@deepseek-ai/dsh-agent-presets/types'
-import { AttachmentError } from '@deepseek-ai/dsh-attachment'
-import type { ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
+import { AttachmentError, extractFileText } from '@deepseek-ai/dsh-attachment'
+import type { FileAttachmentRef, ImageAttachmentRef, ImageMediaType } from '@deepseek-ai/dsh-attachment'
 import { contentHasImage, createUserMessage, freezeMessage, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
 import { errorChain } from '@deepseek-ai/dsh-llm'
 import type { ContentBlock, MessageSource } from '@deepseek-ai/dsh-llm'
 import { isAppendSurfaceEvent, isJsonValue } from '@deepseek-ai/dsh-session'
+import { foldSurface } from '@deepseek-ai/dsh-session/surface'
 import type { JsonValue, Session, SessionEvent, SessionEventMap, SessionHeader, SessionId, UserMessage } from '@deepseek-ai/dsh-session'
 import type { SessionPersistence } from '@deepseek-ai/dsh-session-persistence'
 import { SessionQueryError, type SessionSearchCursor } from '@deepseek-ai/dsh-session-query'
@@ -89,7 +90,7 @@ import type { ApprovalOutcome, ApprovalRequestId } from '@deepseek-ai/dsh-user-a
 // `ctx.get('approval')` without a value dependency on the seam (optional composition).
 import type {} from '@deepseek-ai/dsh-user-approval'
 import { approvalResponsePayloadSchema } from './api/approvals.schema.ts'
-import { imageLimitsProjectionSchema, sessionListMetadataProjectionSchema } from './api/sessions.schema.ts'
+import { fileLimitsProjectionSchema, imageLimitsProjectionSchema, sessionListMetadataProjectionSchema } from './api/sessions.schema.ts'
 import { questionResponsePayloadSchema } from './api/questions.schema.ts'
 import type { ClientResponse, RpcError, RpcReceipt, RpcRequest, RpcResponse } from './api/rpc.ts'
 import { RpcId } from './api/rpc.ts'
@@ -132,20 +133,57 @@ function decodeBase64(data: string): Uint8Array {
   return new Uint8Array(decoded)
 }
 
-/** Validate one prompt as a batch before publishing any durable image object. */
+/** Count messages still pending in the durable agent inbox, replaying spliced events. */
+function pendingInboxMessageCount(events: readonly SessionEvent[]): number {
+  const nextTurn: unknown[] = []
+  const nextStep: unknown[] = []
+  for (const event of events) {
+    if (event.type !== 'agent/inbox/spliced') continue
+    const splice = event.data
+    const list = splice.target === 'next-step' ? nextStep : nextTurn
+    list.splice(splice.start, splice.removedCount ?? 0, ...splice.inserted)
+  }
+  return nextTurn.length + nextStep.length
+}
+
+/** Validate one prompt as a batch before publishing any durable attachment object. */
 async function durablePromptContent(ctx: Context, content: readonly PromptContentPart[]): Promise<ContentBlock[]> {
   if (content.every(part => part.type === 'text')) {
     return content.map(part => ({ type: 'text', text: part.text }))
   }
+  const fileLimits = ctx.attachments.fileLimits
+  const files = content.filter((part): part is Extract<PromptContentPart, { type: 'file' }> => part.type === 'file')
+  if (files.length > fileLimits.maxFilesPerMessage) {
+    throw new AttachmentError('Prompt exceeds the configured file-count limit.', 'TOO_MANY_FILES')
+  }
   const prepared = content.map(part => part.type === 'text'
     ? part
     : { part, data: decodeBase64(part.data) })
-  const images = prepared.filter((part): part is Extract<typeof part, { data: Uint8Array }> => 'data' in part)
-  const refs = await ctx.attachments.saveImages(images.map(image => ({
-    data: image.data,
-    mediaType: image.part.mediaType,
-    ...image.part.name === undefined ? {} : { name: image.part.name },
-  })))
+  const binary = prepared.filter((part): part is Extract<typeof part, { data: Uint8Array }> => 'data' in part)
+  const fileBytes = binary
+    .filter(item => item.part.type === 'file')
+    .reduce((sum, file) => sum + file.data.byteLength, 0)
+  if (fileBytes > fileLimits.maxMessageFileBytes) {
+    throw new AttachmentError('Prompt exceeds the configured aggregate file-byte limit.', 'FILES_TOO_LARGE')
+  }
+  for (const file of binary.filter(item => item.part.type === 'file')) {
+    await ctx.attachments.validateFile({
+      data: file.data,
+      mediaType: file.part.mediaType,
+      ...file.part.name === undefined ? {} : { name: file.part.name },
+    })
+  }
+  // Images commit as one ordered batch (saveImages enforces its own count,
+  // byte, and type limits before any write); files save individually because
+  // each one gets its own server-side text projection.
+  const imageInputs = binary
+    .filter(item => item.part.type === 'image')
+    .map(image => ({
+      data: image.data,
+      mediaType: image.part.mediaType as ImageMediaType,
+      ...image.part.name === undefined ? {} : { name: image.part.name },
+    }))
+  const refs = imageInputs.length === 0 ? [] : await ctx.attachments.saveImages(imageInputs)
   const blocks: ContentBlock[] = []
   let imageIndex = 0
   for (const item of prepared) {
@@ -153,10 +191,20 @@ async function durablePromptContent(ctx: Context, content: readonly PromptConten
       blocks.push({ type: 'text', text: item.text })
       continue
     }
-    const attachment = refs[imageIndex++]
-    /* v8 ignore next -- each prepared image supplied exactly one saveImages input and therefore one ordered ref. */
-    if (attachment === undefined) throw new Error('attachment batch result did not preserve input cardinality')
-    blocks.push({ type: 'image', attachment })
+    if (item.part.type === 'image') {
+      const attachment = refs[imageIndex++]
+      /* v8 ignore next -- each prepared image supplied exactly one saveImages input and therefore one ordered ref. */
+      if (attachment === undefined) throw new Error('attachment batch result did not preserve input cardinality')
+      blocks.push({ type: 'image', attachment })
+      continue
+    }
+    const attachment = await ctx.attachments.saveFile({
+      data: item.data,
+      mediaType: item.part.mediaType,
+      ...item.part.name === undefined ? {} : { name: item.part.name },
+    })
+    const text = await extractFileText(item.data, item.part.mediaType, item.part.name)
+    blocks.push({ type: 'file', attachment, ...(text === undefined ? {} : { text }) })
   }
   return blocks
 }
@@ -219,6 +267,58 @@ function referencedImage(events: readonly SessionEvent[], attachmentId: string):
   return undefined
 }
 
+/** Search durable content for a file reference, including nested tool results. */
+function fileBlockIn(content: unknown, match: (ref: FileAttachmentRef) => boolean): FileAttachmentRef | undefined {
+  if (!Array.isArray(content)) return undefined
+  for (const value of content) {
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) continue
+    const block = value as { type?: unknown; attachment?: unknown; content?: unknown }
+    if (block.type === 'file' && typeof block.attachment === 'object' && block.attachment !== null) {
+      const ref = block.attachment as FileAttachmentRef
+      if (match(ref)) return ref
+    }
+    if (block.type === 'tool-result') {
+      const nested = fileBlockIn(block.content, match)
+      if (nested !== undefined) return nested
+    }
+  }
+  return undefined
+}
+
+/** Search every durable event carrier that can own model-visible file content. */
+function fileInEvent(event: SessionEvent, match: (ref: FileAttachmentRef) => boolean): FileAttachmentRef | undefined {
+  const data = event.data as {
+    content?: unknown
+    message?: { content?: unknown }
+    inserted?: Array<{ content?: unknown }>
+    chunk?: { type?: unknown; block?: unknown }
+  }
+  const direct = fileBlockIn(data.content, match)
+  if (direct !== undefined) return direct
+  if (data.message !== undefined) {
+    const wrapped = fileBlockIn(data.message.content, match)
+    if (wrapped !== undefined) return wrapped
+  }
+  if (data.inserted !== undefined) {
+    for (const message of data.inserted) {
+      const inserted = fileBlockIn(message.content, match)
+      if (inserted !== undefined) return inserted
+    }
+  }
+  if (event.type === 'assistant/chunk' && data.chunk?.type === 'block-end') {
+    return fileBlockIn([data.chunk.block], match)
+  }
+  return undefined
+}
+
+/** Resolve the first file reference matching one opaque id. */
+function referencedFile(events: readonly SessionEvent[], attachmentId: string): FileAttachmentRef | undefined {
+  for (const event of events) {
+    const found = fileInEvent(event, ref => String(ref.attachmentId) === attachmentId)
+    if (found !== undefined) return found
+  }
+  return undefined
+}
 /** Strict browser-zone profile: UTC or an IANA Area/Location-style identifier. */
 const IANA_TIME_ZONE = /^[A-Za-z][A-Za-z0-9_+.-]*(?:\/[A-Za-z0-9_+.-]+)+$/
 
@@ -1292,6 +1392,20 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
     })
   })
 
+  // The fileLimits projection unit mirrors imageLimits: boot-constant, pure
+  // fold, absent while no attachment service is composed. Clients pre-check
+  // generic-file intake from it exactly like the image pre-check.
+  ctx.inject(['sessionProjections', 'attachments'], (projectionCtx) => {
+    projectionCtx.sessionProjections.register<'fileLimits', null>({
+      key: 'fileLimits',
+      schema: fileLimitsProjectionSchema,
+      init: () => null,
+      apply: state => state,
+      view: () => projectionCtx.attachments.fileLimits,
+      stateVersion: 1,
+    })
+  })
+
   /** Project both durable inbox lists, optionally including the splice currently being emitted. */
   const queueItems = (
     agent: Agent,
@@ -2301,7 +2415,14 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
       },
 
       async fork(request) {
-        const { sessionId, atSeq } = request.payload
+        const { sessionId, atSeq, beforeTurnSeq } = request.payload
+        if (atSeq !== undefined && beforeTurnSeq !== undefined) {
+          return err(request, {
+            code: 'invalid-request',
+            message: 'session.fork accepts either atSeq or beforeTurnSeq, not both',
+            details: {},
+          })
+        }
         let source: SessionReadState
         try {
           source = await readSessionState(sessionId)
@@ -2316,32 +2437,47 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
           })
         }
         const events = source.events
-        // An in-log anchor belongs to the turn containing it and must never
-        // clip backward to an earlier completed turn. Omitted and past-end
-        // anchors retain the last-completed-turn shortcut.
         const lastSeq = events.at(-1)?.seq ?? -1
-        const anchoredBoundary = atSeq === undefined
-          ? undefined
-          : events.find(e => e.type === 'turn/end' && e.seq >= atSeq)
-        const boundary = anchoredBoundary
-          ?? (atSeq === undefined || atSeq > lastSeq
-            ? events.findLast(e => e.type === 'turn/end')
-            : undefined)
-        if (boundary === undefined) {
-          return err(request, {
-            code: 'fork-unavailable',
-            message: atSeq !== undefined && atSeq <= lastSeq
-              ? `session "${sessionId}" has not completed the turn containing event ${String(atSeq)}`
-              : `session "${sessionId}" has no completed turn to fork from`,
-            details: { sessionId },
-          })
+        let cut: number
+        if (beforeTurnSeq !== undefined) {
+          // Exclusive cut: the child seed ends before the turn containing the
+          // anchor event, so a resend/edit re-runs that whole turn with new
+          // input. An anchor before any turn forks an empty child.
+          if (beforeTurnSeq > lastSeq) {
+            return err(request, {
+              code: 'fork-unavailable',
+              message: `session "${sessionId}" has no event at seq ${String(beforeTurnSeq)} or beyond`,
+              details: { sessionId },
+            })
+          }
+          cut = events.findLast(e => e.type === 'turn/start' && e.seq <= beforeTurnSeq)?.seq ?? 0
+        } else {
+          // An in-log anchor belongs to the turn containing it and must never
+          // clip backward to an earlier completed turn. Omitted and past-end
+          // anchors retain the last-completed-turn shortcut.
+          const anchoredBoundary = atSeq === undefined
+            ? undefined
+            : events.find(e => e.type === 'turn/end' && e.seq >= atSeq)
+          const boundary = anchoredBoundary
+            ?? (atSeq === undefined || atSeq > lastSeq
+              ? events.findLast(e => e.type === 'turn/end')
+              : undefined)
+          if (boundary === undefined) {
+            return err(request, {
+              code: 'fork-unavailable',
+              message: atSeq !== undefined && atSeq <= lastSeq
+                ? `session "${sessionId}" has not completed the turn containing event ${String(atSeq)}`
+                : `session "${sessionId}" has no completed turn to fork from`,
+              details: { sessionId },
+            })
+          }
+          // Extend the cut through trailing out-of-band appends (session/title,
+          // injections) up to the next turn/start: they are standalone events,
+          // so the seed stays balanced, and the child inherits a title
+          // generated right after the boundary turn.
+          cut = boundary.seq + 1
+          while (cut < events.length && events[cut]?.type !== 'turn/start') cut++
         }
-        // Extend the cut through trailing out-of-band appends (session/title,
-        // injections) up to the next turn/start: they are standalone events, so
-        // the seed stays balanced, and the child inherits a title generated
-        // right after the boundary turn.
-        let cut = boundary.seq + 1
-        while (cut < events.length && events[cut]?.type !== 'turn/start') cut++
         let workspace: Workspace | undefined
         try {
           workspace = await forkWorkspace(source)
@@ -2396,6 +2532,137 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
           }
         }
         return ok(request, { sessionId: childId })
+      },
+
+      async regenerate(request) {
+        const { sessionId, atSeq, text, removeAttachmentIds, additions } = request.payload
+        let source: SessionReadState
+        try {
+          source = await readSessionState(sessionId)
+        } catch (error: unknown) {
+          if (error instanceof SessionNotFound) {
+            return err(request, { code: 'session-not-found', message: error.message, details: { sessionId } })
+          }
+          return err(request, {
+            code: 'internal',
+            message: `regenerate source unavailable for session "${sessionId}": ${String(error)}`,
+            details: {},
+          })
+        }
+        const events = source.events
+        const target = events[atSeq]
+        if (target === undefined || target.type !== 'user/message') {
+          return err(request, {
+            code: 'invalid-request',
+            message: `session "${sessionId}" has no user message at seq ${String(atSeq)}`,
+            details: {},
+          })
+        }
+        // The anchor must still be a live surface node: a message already
+        // rolled back by an earlier regenerate is no longer on the surface.
+        const nodes = foldSurface(events).nodes
+        const startIndex = nodes.indexOf(atSeq)
+        if (startIndex === -1) {
+          return err(request, {
+            code: 'invalid-request',
+            message: `session "${sessionId}" message at seq ${String(atSeq)} was already superseded`,
+            details: {},
+          })
+        }
+        // Regenerate rewrites the CURRENT surface: it requires the agent to be
+        // idle with no queued input and no open turn, so the replacement range
+        // computed here is exactly what the append-time fold will validate.
+        let openTurn = false
+        for (const event of events) {
+          if (event.type === 'turn/start') openTurn = true
+          else if (event.type === 'turn/end') openTurn = false
+        }
+        if (openTurn) {
+          return err(request, {
+            code: 'agent-busy',
+            message: `session "${sessionId}" has a turn in progress`,
+            details: { reason: 'a turn is still running' },
+          })
+        }
+        const pending = pendingInboxMessageCount(events)
+        if (pending > 0) {
+          return err(request, {
+            code: 'agent-busy',
+            message: `session "${sessionId}" has ${String(pending)} queued message(s); wait for them to run before regenerating`,
+            details: { reason: 'queued messages are pending' },
+          })
+        }
+        const resolved = await turnAgentFor<{ accepted: true }>(request, sessionId)
+        if ('refused' in resolved) return resolved.refused
+        const agent = resolved.agent
+        if (agent.status === 'running') {
+          return err(request, {
+            code: 'agent-busy',
+            message: `session "${sessionId}" is running; stop it or wait before regenerating`,
+            details: { reason: 'the agent is running' },
+          })
+        }
+        const shadowed = nodes.slice(startIndex)
+        const start = nodes[startIndex]
+        const end = nodes[nodes.length - 1]
+        if (start === undefined || end === undefined) {
+          return err(request, {
+            code: 'internal',
+            message: `session "${sessionId}" surface is empty while regenerating`,
+            details: {},
+          })
+        }
+        const original = target.data
+        let kept: ContentBlock[] = text === undefined
+          ? original.content
+          : [
+              ...(text === '' ? [] : [{ type: 'text' as const, text }]),
+              ...original.content.filter(block => block.type !== 'text'),
+            ]
+        if (removeAttachmentIds !== undefined && removeAttachmentIds.length > 0) {
+          const removed = new Set(removeAttachmentIds)
+          kept = kept.filter(block => {
+            if (block.type !== 'file' && block.type !== 'image') return true
+            const id = block.attachment.attachmentId
+            return typeof id !== 'string' || !removed.has(id)
+          })
+        }
+        let content: ContentBlock[] = kept
+        if (additions !== undefined && additions.length > 0) {
+          try {
+            content = [...kept, ...await durablePromptContent(ctx, additions)]
+          } catch (error: unknown) {
+            if (error instanceof AttachmentError) {
+              return err(request, {
+                code: 'attachment-error',
+                message: error.message,
+                details: { reason: error.code },
+              })
+            }
+            return err(request, {
+              code: 'internal',
+              message: `regenerate additions failed: ${String(error)}`,
+              details: {},
+            })
+          }
+        }
+        if (content.length === 0) {
+          return err(request, {
+            code: 'invalid-request',
+            message: 'regenerate requires non-empty content',
+            details: {},
+          })
+        }
+        const message = createUserMessage({
+          content,
+          source: { kind: 'user', rpcId: request.rpcId },
+          surfaceReplace: { start, end },
+          surfaceSourceSeqs: shadowed,
+        })
+        // The agent loop lands this message as a surface replacement (the new
+        // tail node) and then answers it as the next turn in this same session.
+        agent.followup(message)
+        return ok(request, { accepted: true as const })
       },
 
       async prompt(request) {
@@ -2475,34 +2742,64 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
             details: {},
           })
         }
-        const ref = referencedImage(state.events, String(attachmentId))
-        if (ref === undefined) {
+        const imageRef = referencedImage(state.events, String(attachmentId))
+        if (imageRef !== undefined) {
+          try {
+            const stored = await ctx.attachments.readImage(imageRef)
+            return ok(request, {
+              attachment: stored.ref,
+              data: Buffer.from(stored.data).toString('base64'),
+            })
+          } catch (error: unknown) {
+            if (error instanceof AttachmentError) {
+              return err(request, {
+                code: 'attachment-error',
+                message: error.message,
+                details: { reason: error.code },
+              })
+            }
+            return err(request, {
+              code: 'internal',
+              message: 'Unable to read image attachment.',
+              details: {},
+            })
+          }
+        }
+        const fileRef = referencedFile(state.events, String(attachmentId))
+        if (fileRef !== undefined) {
+          try {
+            const stored = await ctx.attachments.readFile(fileRef)
+            return ok(request, {
+              attachment: stored.ref,
+              data: Buffer.from(stored.data).toString('base64'),
+            })
+          } catch (error: unknown) {
+            if (error instanceof AttachmentError) {
+              return err(request, {
+                code: 'attachment-error',
+                message: error.message,
+                details: { reason: error.code },
+              })
+            }
+            return err(request, {
+              code: 'internal',
+              message: 'Unable to read file attachment.',
+              details: {},
+            })
+          }
+        }
+        if (imageRef === undefined && fileRef === undefined) {
           return err(request, {
             code: 'attachment-error',
-            message: 'Image is not referenced by this session.',
+            message: 'Attachment is not referenced by this session.',
             details: { reason: 'ATTACHMENT_NOT_REFERENCED' },
           })
         }
-        try {
-          const stored = await ctx.attachments.readImage(ref)
-          return ok(request, {
-            attachment: stored.ref,
-            data: Buffer.from(stored.data).toString('base64'),
-          })
-        } catch (error: unknown) {
-          if (error instanceof AttachmentError) {
-            return err(request, {
-              code: 'attachment-error',
-              message: error.message,
-              details: { reason: error.code },
-            })
-          }
-          return err(request, {
-            code: 'internal',
-            message: 'Unable to read image attachment.',
-            details: {},
-          })
-        }
+        return err(request, {
+          code: 'internal',
+          message: 'Unable to resolve attachment reference.',
+          details: {},
+        })
       },
 
       updateQueue(request) {
