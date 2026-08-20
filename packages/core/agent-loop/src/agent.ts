@@ -289,9 +289,9 @@ export class ReactLoopAgent implements Agent {
             this.session.append('user/message', durable, surfaceReplace === undefined
               ? { surfaceOp: 'append' }
               : {
-                  surfaceOp: { op: 'replace', start: surfaceReplace.start, end: surfaceReplace.end },
-                  ...(surfaceSourceSeqs === undefined ? {} : { sourceEventSeqs: [...surfaceSourceSeqs] }),
-                })
+                surfaceOp: { op: 'replace', start: surfaceReplace.start, end: surfaceReplace.end },
+                ...(surfaceSourceSeqs === undefined ? {} : { sourceEventSeqs: [...surfaceSourceSeqs] }),
+              })
           }
           // max-tokens is sticky: once any step hits the ceiling, later steps
           // that complete normally must not downgrade the turn outcome.
@@ -353,14 +353,33 @@ export class ReactLoopAgent implements Agent {
       )
       const assembler = new BlockAssembler()
       const chunkSeqs: number[] = []
-      const stream = preparedCall?.stream(request) ?? this.loopCtx.llm.stream(request)
-      signal.throwIfAborted()
-      for await (const chunk of stream) {
+      try {
+        const stream = preparedCall?.stream(request) ?? this.loopCtx.llm.stream(request)
         signal.throwIfAborted()
-        chunkSeqs.push(this.session.append('assistant/chunk', { turn, step, chunk }).seq)
-        assembler.push(chunk)
+        for await (const chunk of stream) {
+          signal.throwIfAborted()
+          chunkSeqs.push(this.session.append('assistant/chunk', { turn, step, chunk }).seq)
+          assembler.push(chunk)
+        }
+        signal.throwIfAborted()
+      } catch (error: unknown) {
+        if (signal.aborted) {
+          const content = assembler.interruptedBlocks()
+          if (content.length > 0) {
+            this.session.append('assistant/message', {
+              turn,
+              step,
+              message: createAssistantMessage({
+                content,
+                source: { provider: request.provider, model: request.model },
+              }),
+              interrupted: true,
+              ...assembler.usage === undefined ? {} : { usage: assembler.usage },
+            }, { surfaceOp: 'append', sourceEventSeqs: chunkSeqs })
+          }
+        }
+        throw error
       }
-      signal.throwIfAborted()
       const finish = assembler.finish
       if (finish.kind === 'error' || finish.kind === 'aborted') {
         const action = await this.dispatch.waterfall(

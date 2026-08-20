@@ -15,6 +15,7 @@ import type {
 
 export { AttachmentId } from './brand.ts'
 export { AttachmentError, isImageAdmissionError } from './error.ts'
+export { admitEncodedImages } from './admission.ts'
 export type { AttachmentErrorCode, ImageAdmissionErrorCode } from './error.ts'
 export { ocrImagePng, ocrPdfPage, tessdataDir } from './ocr.ts'
 export { extractFileText, shouldExtractText } from './text.ts'
@@ -23,6 +24,7 @@ export type {
   FileAttachmentLimits,
   FileAttachmentRef,
   FileMediaType,
+  EncodedImageAttachment,
   ImageAttachmentLimits,
   ImageAttachmentRef,
   ImageMediaType,
@@ -120,10 +122,7 @@ export abstract class AttachmentStore extends Service {
    * @returns completion after the admission policy has been applied.
    */
   validateFile(_input: SaveFileAttachment): Promise<void> {
-    return Promise.reject(new AttachmentError(
-      'This attachment store does not support generic file uploads.',
-      'FILE_STORAGE_UNSUPPORTED',
-    ))
+    return this.rejectFileUnsupported()
   }
 
   /**
@@ -132,10 +131,7 @@ export abstract class AttachmentStore extends Service {
    * @returns a durable content-addressed reference.
    */
   saveFile(_input: SaveFileAttachment): Promise<FileAttachmentRef> {
-    return Promise.reject(new AttachmentError(
-      'This attachment store does not support generic file uploads.',
-      'FILE_STORAGE_UNSUPPORTED',
-    ))
+    return this.rejectFileUnsupported()
   }
 
   /**
@@ -146,6 +142,11 @@ export abstract class AttachmentStore extends Service {
    * @throws the signal reason when aborted, or a storage error when verification fails.
    */
   readFile(_ref: FileAttachmentRef, _signal?: AbortSignal): Promise<StoredFileAttachment> {
+    return this.rejectFileUnsupported()
+  }
+
+  /** Base default for stores that publish images only: reject any generic-file admission. */
+  private rejectFileUnsupported(): Promise<never> {
     return Promise.reject(new AttachmentError(
       'This attachment store does not support generic file uploads.',
       'FILE_STORAGE_UNSUPPORTED',

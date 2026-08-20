@@ -14,6 +14,7 @@ import type { Context } from '@deepseek-ai/cordis'
 // method) instead of the standalone helper.
 import type { ISessions, SessionFace, SessionId } from '@deepseek-ai/dsh-client-runtime/client'
 import type { FileAttachmentRef, ImageAttachmentRef, ImageMediaType } from '@deepseek-ai/dsh-attachment'
+import type { SubmitImageAttachment, SubmitOutcome } from '@deepseek-ai/dsh-client-ui-input-trigger/client'
 import type { ComposerAttachment } from './contract/slots.ts'
 import type { QueueAction, QueueItemId } from './contract/queue.ts'
 import type { ComposerBlocks } from './input/blocks.ts'
@@ -150,22 +151,26 @@ export class ConversationController extends Service implements IConversation {
    * @param text - serialized prompt text.
    * @param imageIds - ordered draft-local attachment ids.
    * @param mode - queue or steer delivery selected by composer policy.
+   * @param signal - optional cancellation for the complete Host admission.
+   * @returns the Host admission outcome; local attachment preparation failures reject.
    */
   async sendSession(
     session: SessionFace,
     text: string,
     imageIds: readonly DraftAttachmentId[],
     mode: InputSubmitMode,
-  ): Promise<void> {
+    signal?: AbortSignal,
+  ): Promise<SubmitOutcome> {
     const attachments = this.draftImages(imageIds)
     if (attachments.length !== imageIds.length) {
       throw new Error('conversation.sendSession: one or more draft images are no longer available')
     }
     const uploaded = await this.serializeAttachments(attachments)
     const content = [...uploaded, ...(text === '' ? [] : [{ type: 'text' as const, text }])]
-    const result = await session.prompt(content, mode)
-    if (!result.ok) throw new Error(`conversation.send failed: ${result.error.code}: ${result.error.message}`)
+    const result = await session.prompt(content, mode, signal)
+    if (!result.ok) return { kind: 'error' }
     this.releaseDraftImages(attachments)
+    return { kind: 'success' }
   }
 
   /**
@@ -202,6 +207,21 @@ export class ConversationController extends Service implements IConversation {
       if (attachment !== undefined) attachments.push(attachment)
     }
     return attachments
+  }
+
+  /**
+   * Serialize ordered draft images to command-submit wire payloads without
+   * sending or releasing them (the composer releases only after the command
+   * settles successfully).
+   * @param imageIds - ordered draft-local attachment ids.
+   * @returns base64 payloads in id order.
+   */
+  async serializeDraftImages(imageIds: readonly DraftAttachmentId[]): Promise<readonly SubmitImageAttachment[]> {
+    const attachments = this.draftImages(imageIds)
+    if (attachments.length !== imageIds.length) {
+      throw new Error('conversation.serializeDraftImages: one or more draft images are no longer available')
+    }
+    return Promise.all(attachments.map(attachment => this.encodeImage(attachment.file)))
   }
 
   /**
@@ -382,6 +402,15 @@ export class ConversationController extends Service implements IConversation {
         ...base,
       }
     }))
+  }
+
+  /** Canonical base64 wire form of one browser image file. */
+  private async encodeImage(file: File): Promise<SubmitImageAttachment> {
+    return {
+      mediaType: imageMediaType(file.type),
+      data: bytesToBase64(new Uint8Array(await file.arrayBuffer())),
+      ...(file.name === '' ? {} : { name: file.name }),
+    }
   }
 }
 

@@ -203,7 +203,11 @@ async function fetchCuratedPlugins(signal: AbortSignal): Promise<CuratedEntry[]>
       category = (heading[1] ?? '').trim()
       continue
     }
-    const entry = /^-\s+\[([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)\]\(https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+\)\s*-\s*(.+)$/.exec(rawLine)
+    const entryLinePattern = new RegExp(
+      '^-\\s+\\[([A-Za-z0-9_.-]+\\/[A-Za-z0-9_.-]+)\\]\\(https:\\/\\/github\\.com\\/'
+        + '[A-Za-z0-9_.-]+\\/[A-Za-z0-9_.-]+\\)\\s*-\\s*(.+)$',
+    )
+    const entry = entryLinePattern.exec(rawLine)
     if (entry === null) continue
     const fullName = entry[1] ?? ''
     if (seen.has(fullName)) continue
@@ -241,7 +245,7 @@ async function fetchGithubPlugins(signal: AbortSignal): Promise<StorePlugin[]> {
   const seen = new Set<string>()
   for (let page = 1; page <= GITHUB_PAGES; page++) {
     const body = await fetchJson(
-      `https://api.github.com/search/repositories?q=topic:dsh-plugin&sort=updated`
+      'https://api.github.com/search/repositories?q=topic:dsh-plugin&sort=updated'
       + `&order=desc&per_page=100&page=${String(page)}`,
       { accept: 'application/vnd.github+json', 'user-agent': 'dsh-desktop-store' },
       signal,

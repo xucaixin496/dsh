@@ -199,7 +199,7 @@ export function StoreTab({ t }: StoreTabProps) {
           ? <p className={css.empty}>{t('storeEmpty')}</p>
           : (
             <ul className={css.list}>
-              {matches.slice(0, visible).map(plugin => {
+              {matches.slice(0, visible).map((plugin) => {
                 const installedHere = isInstalled(plugin, installed)
                 return (
                   <li key={plugin.spec} className={css.item}>

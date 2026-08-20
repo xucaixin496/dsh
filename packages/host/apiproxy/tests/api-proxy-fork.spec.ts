@@ -482,7 +482,7 @@ describe('sessions.fork', () => {
     class FakeAttachmentStore extends AttachmentStore {
       readonly imageLimits: ImageAttachmentLimits = {
         maxImageBytes: 1_000_000, maxImagesPerMessage: 10, maxMessageImageBytes: 10_000_000,
-        maxImagePixels: 40_000_000, mediaTypes: ['image/png'],
+        maxImagePixels: 40_000_000, maxImageDimension: 2000, mediaTypes: ['image/png'],
       }
       override readonly fileLimits: FileAttachmentLimits = {
         maxFileBytes: 10_000_000, maxFilesPerMessage: 10, maxMessageFileBytes: 100_000_000,

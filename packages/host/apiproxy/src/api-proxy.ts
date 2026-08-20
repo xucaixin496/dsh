@@ -5,6 +5,7 @@
 
 import { randomUUID } from 'node:crypto'
 import { mkdir, stat } from 'node:fs/promises'
+import { homedir } from 'node:os'
 import { dirname } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import { installModelSelection } from '@deepseek-ai/dsh-agent'
@@ -147,6 +148,7 @@ function pendingInboxMessageCount(events: readonly SessionEvent[]): number {
 }
 
 /** Validate one prompt as a batch before publishing any durable attachment object. */
+/** Validate one prompt as a batch before publishing any durable image object. */
 async function durablePromptContent(ctx: Context, content: readonly PromptContentPart[]): Promise<ContentBlock[]> {
   if (content.every(part => part.type === 'text')) {
     return content.map(part => ({ type: 'text', text: part.text }))
@@ -2616,12 +2618,12 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
         let kept: ContentBlock[] = text === undefined
           ? original.content
           : [
-              ...(text === '' ? [] : [{ type: 'text' as const, text }]),
-              ...original.content.filter(block => block.type !== 'text'),
-            ]
+            ...(text === '' ? [] : [{ type: 'text' as const, text }]),
+            ...original.content.filter(block => block.type !== 'text'),
+          ]
         if (removeAttachmentIds !== undefined && removeAttachmentIds.length > 0) {
           const removed = new Set(removeAttachmentIds)
-          kept = kept.filter(block => {
+          kept = kept.filter((block) => {
             if (block.type !== 'file' && block.type !== 'image') return true
             const id = block.attachment.attachmentId
             return typeof id !== 'string' || !removed.has(id)
@@ -3171,6 +3173,7 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
           provider: selection.provider,
           model: selection.model,
           attachedSessions: ctx.agents.list().length,
+          home: homedir(),
           canOpenPath: canOpenPaths(),
         }))
       },

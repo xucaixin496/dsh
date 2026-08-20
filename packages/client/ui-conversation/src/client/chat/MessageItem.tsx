@@ -10,9 +10,10 @@ import type {
   ModelRetryNode, TurnErrorNode, UserMessageNode,
 } from '@deepseek-ai/dsh-client-runtime/client'
 import { JsonBlock, MessageText, StateDot } from '@deepseek-ai/dsh-client-ui-primitives'
-import type { ChatNodeViewProps, ChatViewSlotProps } from '../contract/slots.ts'
-import { FileChip, ImageGallery, type ImageLoader } from '@deepseek-ai/dsh-client-ui-attachment'
-import { messageFileLabels, messageImageLabels } from '../image-labels.ts'
+import { FileChip } from '@deepseek-ai/dsh-client-ui-attachment'
+import { messageFileLabels } from '../image-labels.ts'
+import type { ChatNodeOwnerProps, ChatNodeViewProps, ChatViewSlotProps } from '../contract/slots.ts'
+import { ReferenceIcon } from '../reference/ReferenceIcon.tsx'
 import { CompactionItem } from './CompactionItem.tsx'
 import { ContextInjectionRow } from './ContextInjectionRow.tsx'
 import { MessageIconActions } from './MessageIconActions.tsx'
@@ -164,21 +165,59 @@ function TurnMaxTokensItem({ t }: {
  * scan as the composer, minus the lexicon: sent tokens were validated at
  * compose time, so shape alone decorates).
  */
-function projectUserText(text: string): ReactNode {
-  const re = /(^|\s)([/@][\w-]+)(?=\s|$)/g
-  const parts: ReactNode[] = []
-  let cursor = 0
+function projectUserText(text: string, sessionLabels: readonly string[]): ReactNode {
+  const ranges: { start: number; end: number; label: string; kind: 'session' | 'plain' }[] = []
+  for (const rawLabel of [...new Set(sessionLabels)].sort((a, b) => b.length - a.length)) {
+    const label = `@${rawLabel}`
+    let start = text.indexOf(label)
+    while (start >= 0) {
+      ranges.push({ start, end: start + label.length, label, kind: 'session' })
+      start = text.indexOf(label, start + label.length)
+    }
+  }
+  const re = /(^|\s)(\/[\w-]+|@"[^"\n]+"|@[^\s]+)/gu
   let m: RegExpExecArray | null
   while ((m = re.exec(text)) !== null) {
     const tokenStart = m.index + (m[1]?.length ?? 0)
-    const label = m[2] ?? ''
+    const rawLabel = m[2] ?? ''
+    const label = rawLabel.startsWith('@"')
+      ? rawLabel
+      : rawLabel.replace(/[.,;:!?，。；：！？]+$/gu, '')
+    if (label.length <= 1) continue
+    ranges.push({ start: tokenStart, end: tokenStart + label.length, label, kind: 'plain' })
+  }
+  ranges.sort((a, b) => a.start - b.start
+    || (a.kind === b.kind ? b.end - a.end : a.kind === 'session' ? -1 : 1))
+  const parts: ReactNode[] = []
+  let cursor = 0
+  for (const range of ranges) {
+    if (range.start < cursor) continue
+    const { start: tokenStart, end, label, kind } = range
     if (tokenStart > cursor) parts.push(<MessageText key={cursor} text={text.slice(cursor, tokenStart)} />)
+    const referenceKind = kind === 'session'
+      ? 'session'
+      : label.startsWith('@')
+        ? label.endsWith('/') ? 'folder' : 'file'
+        : undefined
+    const displayLabel = referenceKind === undefined
+      ? label
+      : referenceKind === 'session'
+        ? label.slice(1)
+        : label.slice(1).replace(/^"|"$/gu, '').split(/[\\/]/u).filter(Boolean).at(-1) ?? label.slice(1)
     parts.push(
-      <span key={tokenStart} className={css.refChip} data-ref-chip={label.startsWith('@') ? 'subagent' : 'skill'}>
-        {label}
+      <span
+        key={tokenStart}
+        className={css.refChip}
+        data-ref-chip={referenceKind ?? 'skill'}
+        title={label}
+      >
+        {referenceKind !== undefined && (
+          <ReferenceIcon kind={referenceKind} size={16} className={css.refIcon} />
+        )}
+        {displayLabel}
       </span>,
     )
-    cursor = tokenStart + label.length
+    cursor = end
   }
   if (parts.length === 0) return <MessageText text={text} />
   if (cursor < text.length) parts.push(<MessageText key={cursor} text={text.slice(cursor)} />)
@@ -211,12 +250,13 @@ function downloadAttachment(
 
 /** Right-aligned bubble shared by user and steering rows. */
 function UserStyleBubble({
-  content, imageLoader, fileLoader, actions, pending = false, editing = false, editValue = '',
-  onEditChange, onCancelEdit, onSendEdit, sendingEdit = false, editAttachments, t,
+  content, fileLoader, renderMessageImages, actions, pending = false,
+  editing = false, editValue = '', onEditChange, onCancelEdit, onSendEdit,
+  sendingEdit = false, editAttachments, referenceLabels = [], t,
 }: {
   content: readonly unknown[]
-  imageLoader: ImageLoader
   fileLoader: (attachment: UserFile['attachment']) => Promise<{ data: Uint8Array; name?: string; mediaType: string }>
+  renderMessageImages: ChatNodeOwnerProps['renderMessageImages']
   /** Optional IconActions (or similar) below the bubble; receives the joined text. */
   actions?: ((text: string) => ReactNode) | undefined
   /** Whether this is the Host-authoritative pre-admission steering projection. */
@@ -239,6 +279,8 @@ function UserStyleBubble({
     onAddFiles: (files: FileList | null) => void
     addLabel: string
   } | undefined
+  /** Exact session mention labels associated by the adjacent recall node. */
+  referenceLabels?: readonly string[]
   t: ChatViewSlotProps['t']
 }): ReactNode {
   const { text, images, files, rest } = contentParts(content)
@@ -248,7 +290,7 @@ function UserStyleBubble({
   return (
     <div className={css.userRow} data-pending-steering={pending || undefined} data-time-hover-root>
       <div className={css.userStack}>
-        {!editing && <ImageGallery images={images} load={imageLoader} align="end" labels={messageImageLabels(t)} />}
+        {!editing && renderMessageImages({ images, align: 'end' })}
         {!editing && files.length > 0 && (
           <div className={css.fileList}>
             {files.map((file, index) => (
@@ -265,12 +307,6 @@ function UserStyleBubble({
             ))}
           </div>
         )}
-        {showBubble && !editing && (
-          <div className={css.bubble}>
-            {projectUserText(text)}
-            {rest.map((block, i) => <JsonBlock key={i} label={t('message.extraBlock')} payload={block} truncatedLabel={truncated} />)}
-          </div>
-        )}
         {editing && (
           <div className={`${css.bubble} ${css.bubbleEditing}`}>
             <textarea
@@ -280,7 +316,7 @@ function UserStyleBubble({
               placeholder={t('message.edit.placeholder')}
               aria-label={t('message.edit.placeholder')}
               autoFocus
-              onKeyDown={event => {
+              onKeyDown={(event) => {
                 if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
                   event.preventDefault()
                   onSendEdit?.()
@@ -292,51 +328,51 @@ function UserStyleBubble({
             />
             {editAttachments !== undefined
               && (editAttachments.removable.length > 0 || editAttachments.added.length > 0) && (
-                <div className={css.editAttachments}>
-                  {editAttachments.removable.map(attachment => (
-                    <span key={attachment.id} className={css.editAttachmentChip}>
-                      <FileChip
-                        value={{
-                          name: attachment.name || t('file.unnamed'),
-                          bytes: attachment.bytes,
-                          mediaType: attachment.mediaType,
-                        }}
-                        labels={messageFileLabels(t)}
-                        onDownload={attachment.onDownload}
-                      />
-                      <button
-                        type="button"
-                        className={css.editAttachmentRemove}
-                        aria-label={t('message.edit.removeAttachment', { name: attachment.name })}
-                        onClick={() => editAttachments.onRemove(attachment.id)}
-                      >
-                        <IconCloseOutline16 />
-                      </button>
-                    </span>
-                  ))}
-                  {editAttachments.added.map((attachment, index) => (
-                    <span key={`added-${index}`} className={css.editAttachmentChip}>
-                      <FileChip
-                        value={{
-                          name: attachment.name || t('file.unnamed'),
-                          bytes: attachment.bytes,
-                          mediaType: attachment.mediaType,
-                        }}
-                        labels={messageFileLabels(t)}
-                        onDownload={attachment.onDownload}
-                      />
-                      <button
-                        type="button"
-                        className={css.editAttachmentRemove}
-                        aria-label={t('message.edit.removeAttachment', { name: attachment.name })}
-                        onClick={() => editAttachments.onRemoveAdded(index)}
-                      >
-                        <IconCloseOutline16 />
-                      </button>
-                    </span>
-                  ))}
-                </div>
-              )}
+              <div className={css.editAttachments}>
+                {editAttachments.removable.map(attachment => (
+                  <span key={attachment.id} className={css.editAttachmentChip}>
+                    <FileChip
+                      value={{
+                        name: attachment.name || t('file.unnamed'),
+                        bytes: attachment.bytes,
+                        mediaType: attachment.mediaType,
+                      }}
+                      labels={messageFileLabels(t)}
+                      onDownload={attachment.onDownload}
+                    />
+                    <button
+                      type="button"
+                      className={css.editAttachmentRemove}
+                      aria-label={t('message.edit.removeAttachment', { name: attachment.name })}
+                      onClick={() => editAttachments.onRemove(attachment.id)}
+                    >
+                      <IconCloseOutline16 />
+                    </button>
+                  </span>
+                ))}
+                {editAttachments.added.map((attachment, index) => (
+                  <span key={`added-${index}`} className={css.editAttachmentChip}>
+                    <FileChip
+                      value={{
+                        name: attachment.name || t('file.unnamed'),
+                        bytes: attachment.bytes,
+                        mediaType: attachment.mediaType,
+                      }}
+                      labels={messageFileLabels(t)}
+                      onDownload={attachment.onDownload}
+                    />
+                    <button
+                      type="button"
+                      className={css.editAttachmentRemove}
+                      aria-label={t('message.edit.removeAttachment', { name: attachment.name })}
+                      onClick={() => editAttachments.onRemoveAdded(index)}
+                    >
+                      <IconCloseOutline16 />
+                    </button>
+                  </span>
+                ))}
+              </div>
+            )}
             <div className={css.editFooter}>
               <button
                 type="button"
@@ -382,6 +418,15 @@ function UserStyleBubble({
             </div>
           </div>
         )}
+        {!editing && showBubble && <div className={css.bubble}>
+          {projectUserText(text, referenceLabels)}
+          {rest.map((block, i) => <JsonBlock key={i} label={t('message.extraBlock')} payload={block} truncatedLabel={truncated} />)}
+        </div>}
+        {!editing && referenceLabels.length > 0 && (
+          <div className={css.referenceSummary}>
+            {t('message.referenceSummary', { labels: referenceLabels.join(t('message.referenceSeparator')) })}
+          </div>
+        )}
       </div>
       {!editing && actions?.(text)}
     </div>
@@ -394,18 +439,17 @@ function UserStyleBubble({
  * @param props - Pending message content and conversation translator.
  * @returns the pending steering bubble.
  */
-export function PendingSteeringBubble({ content, loadImage, loadFile, t }: {
+export function PendingSteeringBubble({ content, loadFile, renderMessageImages, t }: {
   content: readonly unknown[]
-  loadImage?: ImageLoader
   loadFile: (attachment: UserFile['attachment']) => Promise<{ data: Uint8Array; name?: string; mediaType: string }>
+  renderMessageImages: ChatNodeOwnerProps['renderMessageImages']
   t: ChatViewSlotProps['t']
 }): ReactNode {
-  const imageLoader = loadImage ?? (() => Promise.reject(new Error(t('image.serviceUnavailable'))))
   return (
     <UserStyleBubble
       content={content}
-      imageLoader={imageLoader}
       fileLoader={loadFile}
+      renderMessageImages={renderMessageImages}
       pending
       t={t}
       actions={text => (
@@ -422,7 +466,7 @@ export function PendingSteeringBubble({ content, loadImage, loadFile, t }: {
 
 /** User and admitted-steering keyed Chat renderer. */
 export const UserMessageNodeView = memo(function UserMessageNodeView({
-  node, loadImage, loadFile, resendAt, t,
+  node, loadFile, resendAt, renderMessageImages, t,
 }: ChatNodeViewProps<'user' | 'steering'>) {
   const data = node.data
   const { text, images, files } = contentParts(data.content)
@@ -470,7 +514,7 @@ export const UserMessageNodeView = memo(function UserMessageNodeView({
     void resendAt(node.data.seq).finally(() => setSending(false))
   }, [sending, text, hasAttachments, resendAt, node.data.seq])
   const toggleRemove = useCallback((id: string) => {
-    setRemovedIds(previous => {
+    setRemovedIds((previous) => {
       const next = new Set(previous)
       if (next.has(id)) next.delete(id)
       else next.add(id)
@@ -527,8 +571,9 @@ export const UserMessageNodeView = memo(function UserMessageNodeView({
   return (
     <UserStyleBubble
       content={data.content}
-      imageLoader={loadImage}
       fileLoader={loadFile}
+      renderMessageImages={renderMessageImages}
+      {...data.referenceLabels === undefined ? {} : { referenceLabels: data.referenceLabels }}
       t={t}
       editing={editing}
       editValue={draft}
@@ -544,7 +589,7 @@ export const UserMessageNodeView = memo(function UserMessageNodeView({
         onAddFiles: addFiles,
         addLabel: t('message.edit.addAttachment'),
       } : undefined}
-      actions={!editing ? (bubbleText) => (
+      actions={!editing ? bubbleText => (
         <MessageIconActions
           text={bubbleText}
           time={data.time}
