@@ -280,7 +280,18 @@ export class ReactLoopAgent implements Agent {
         phase.step = step
         try {
           for (const message of decision.messages) {
-            this.session.append('user/message', message, { surfaceOp: 'append' })
+            // A message may carry host admission metadata requesting a surface
+            // REPLACEMENT instead of an append (regenerate/rewrite): the loop
+            // lands the same user message as the tail node while shadowing the
+            // cited surface range. The metadata stays out of the durable
+            // message projection.
+            const { surfaceReplace, surfaceSourceSeqs, ...durable } = message
+            this.session.append('user/message', durable, surfaceReplace === undefined
+              ? { surfaceOp: 'append' }
+              : {
+                surfaceOp: { op: 'replace', start: surfaceReplace.start, end: surfaceReplace.end },
+                ...(surfaceSourceSeqs === undefined ? {} : { sourceEventSeqs: [...surfaceSourceSeqs] }),
+              })
           }
           // max-tokens is sticky: once any step hits the ceiling, later steps
           // that complete normally must not downgrade the turn outcome.

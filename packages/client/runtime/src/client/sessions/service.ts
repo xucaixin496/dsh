@@ -21,6 +21,7 @@ import type {
 // Value import from the inline-safe wire layer (not the connection plugin):
 // plugin-to-plugin value imports are a bundle purity error.
 import { SESSION_SEARCH_RESULT_LIMIT } from '@deepseek-ai/dsh-host-apiproxy/api'
+import type { PromptContentPart } from '@deepseek-ai/dsh-host-apiproxy/api'
 import type {
   HostObservable, SessionMaybeProvideInfo, SessionProvideInfo,
 } from '@deepseek-ai/dsh-client-ui-slots'
@@ -496,7 +497,9 @@ export class SessionRuntime implements ISessions {
    * @param opts - source session id, the optional event seq anchoring the
    *   cut (the boundary is the first turn/end at or after it; an in-log
    *   anchor in an open turn is unavailable rather than clipped backward),
-   *   and whether to increment an inherited durable title before resolving.
+   *   the optional exclusive anchor (the child seed ends before the turn
+   *   containing it), and whether to increment an inherited durable title
+   *   before resolving.
    *   A fractional anchor floors to a real event seq: the frozen nodes of an
    *   interrupted turn carry flow-ordering seqs between two events, and the
    *   wire takes integers only.
@@ -507,6 +510,7 @@ export class SessionRuntime implements ISessions {
   async fork(opts: {
     sessionId: SessionId
     atSeq?: number
+    beforeTurnSeq?: number
     increaseTitle?: boolean
   }): Promise<SessionId> {
     const sourceTitle = opts.increaseTitle
@@ -518,6 +522,7 @@ export class SessionRuntime implements ISessions {
       // turn/start), so the host's first-turn/end-at-or-after cut still ends
       // on that turn — never clipped back to the previous one.
       ...(opts.atSeq === undefined ? {} : { atSeq: Math.floor(opts.atSeq) }),
+      ...(opts.beforeTurnSeq === undefined ? {} : { beforeTurnSeq: Math.floor(opts.beforeTurnSeq) }),
     })
     if (!result.ok) throw new SessionForkError(result.error, opts.sessionId)
     this.projectList()
@@ -529,6 +534,21 @@ export class SessionRuntime implements ISessions {
       if (!renamed.ok) throw new Error(`fork child rename failed: ${renamed.error.code}: ${renamed.error.message}`)
     }
     return childId
+  }
+
+  /**
+   * Re-run one user message in place (surface rewrite; no branch is created).
+   * @param opts - session, the anchored user-message seq, and optional edited text.
+   * @returns the regenerate result; failures keep the source view untouched.
+   */
+  async regenerate(opts: {
+    sessionId: SessionId
+    atSeq: number
+    text?: string
+    removeAttachmentIds?: string[]
+    additions?: PromptContentPart[]
+  }): Promise<RpcResult<{ accepted: true }>> {
+    return this.manager.regenerate(opts)
   }
 
   /**

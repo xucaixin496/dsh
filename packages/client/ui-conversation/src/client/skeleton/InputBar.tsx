@@ -12,6 +12,8 @@ import clsx from 'clsx'
 import {
   IconPlusOutline16, IconWarningOutline16, Toast, Tooltip,
 } from '@deepseek-ai/dsh-client-ui-primitives'
+import { AttachmentRail, DropOverlay, ImageLightbox } from '@deepseek-ai/dsh-client-ui-attachment'
+import type { AttachmentRailItem } from '@deepseek-ai/dsh-client-ui-attachment'
 // Type-only: the `plan` projection key merge (the TodoDock posture — the
 // composer reads a host-computed value; the domain owns the key).
 import type {} from '@deepseek-ai/dsh-plan-mode/client'
@@ -21,10 +23,12 @@ import type {} from '@deepseek-ai/dsh-goal/client'
 // wire types: apiproxy's sessions contract declares it, and client-runtime's
 // api-remotes import already places it in every client program.
 import type { Translate } from '@deepseek-ai/dsh-client-ui-slots'
-import type { ComposerBarProps } from '../contract/slots.ts'
+import type { ComposerAttachment, ComposerBarProps, ImageComposerAttachment } from '../contract/slots.ts'
 import { deriveDecorations } from '../input/decorations.ts'
 import type { DraftDecorations } from '../input/decorations.ts'
-import { attachmentErrorText, imageSizeText } from '../image-labels.ts'
+import {
+  attachmentErrorText, attachmentRailLabels, dropOverlayLabels, imageSizeText, lightboxLabels,
+} from '../image-labels.ts'
 import { ReferenceIcon } from '../reference/ReferenceIcon.tsx'
 import { ContextMeter } from './ContextMeter.tsx'
 import { PermissionSelect } from './PermissionSelect.tsx'
@@ -33,6 +37,11 @@ import css from './InputBar.module.css'
 
 /** Decoration product of the no-session state (no machine, empty draft). */
 const INERT_DECORATIONS: DraftDecorations = { token: null, chips: [], textRefs: [], hint: null }
+
+/** Rail thumbnail carrying its source attachment for the open/remove callbacks. */
+interface ComposerRailItem extends AttachmentRailItem {
+  attachment: ComposerAttachment
+}
 
 export type InputBarProps = ComposerBarProps
 
@@ -66,6 +75,11 @@ export function InputBar({
     [draftImages, input?.imageIds],
   )
   const empty = draft.trim() === '' && attachments.length === 0
+  const [preview, setPreview] = useState<ImageComposerAttachment | null>(null)
+  const [dragActive, setDragActive] = useState(false)
+  // Transient error banner (image-intake rejections and prompt failures): the
+  // seq keys the Toast so an identical repeated message restarts the
+  // hold-then-fade cycle instead of silently reusing the faded one.
   // Transient error banner (machine notices, image-intake rejections, and
   // prompt failures): the seq keys the Toast so an identical repeated message
   // restarts the hold-then-fade cycle instead of reusing the faded one.
@@ -79,6 +93,7 @@ export function InputBar({
   // The deployment's image-intake limits (absent while no attachment service
   // is composed — the pre-check below then defers entirely to the host).
   const imageLimits = useProjection('imageLimits')
+  const fileLimits = useProjection('fileLimits')
   // Prompt failures are ordinary failures (no create/attach transaction exists
   // anymore): the toast announces promptError, the draft stays in the machine,
   // and the user resubmits. A remount over a session whose machine still holds
@@ -97,6 +112,7 @@ export function InputBar({
   }, [notice, showToast])
   const inputRef = useRef<HTMLTextAreaElement | null>(null)
   const cardRef = useRef<HTMLDivElement | null>(null)
+  const dragDepthRef = useRef(0)
   const scrollRef = useRef<HTMLDivElement | null>(null)
   const mirrorRef = useRef<HTMLDivElement | null>(null)
   const safari = useMemo(() => isSafariBrowser(navigator), [])
@@ -436,35 +452,113 @@ export function InputBar({
   // a projected limit is refused as a whole batch, announced immediately, and
   // never enters the rail — no more submit-time failure rolling the rail
   // back. The host enforces the same limits at submit for callers that bypass
-  // this composer.
+  // this composer. Images use the image policy; every other non-audio/video
+  // file uses the generic-file policy; audio/video is refused up front.
   const intakeImages = useCallback((files: readonly File[]): void => {
     if (addImages === undefined || files.length === 0) return
     const rejected = ((): string | null => {
-      if (imageLimits !== undefined) {
-        // Format precedes limits (DeepSeek Chat's filter order): a batch with
-        // a non-image must announce the format problem, not a count or size
-        // it could never pass anyway — addImages rejects it authoritatively.
-        if (files.some(file => !(imageLimits.mediaTypes as readonly string[]).includes(file.type))) {
-          return addImages(files)
+      if (files.some(file => file.type.startsWith('audio/') || file.type.startsWith('video/'))) {
+        return t('file.unsupportedType')
+      }
+      const imageFiles = files.filter(file => file.type.startsWith('image/'))
+      const otherFiles = files.filter(file => !file.type.startsWith('image/'))
+      if (imageFiles.length > 0 && imageLimits !== undefined) {
+        if (imageFiles.some(file => !(imageLimits.mediaTypes as readonly string[]).includes(file.type))) {
+          return addImages(imageFiles)
         }
-        if (attachments.length + files.length > imageLimits.maxImagesPerMessage) {
+        if (attachments.length + imageFiles.length > imageLimits.maxImagesPerMessage) {
           return t('image.tooMany', { count: imageLimits.maxImagesPerMessage })
         }
-        if (files.some(file => file.size > imageLimits.maxImageBytes)) {
+        const imageBytes = attachments.reduce((sum, attachment) => sum + attachment.file.size, 0)
+          + imageFiles.reduce((sum, file) => sum + file.size, 0)
+        if (imageBytes > imageLimits.maxMessageImageBytes) {
+          return t('image.totalTooLarge', { size: imageSizeText(imageLimits.maxMessageImageBytes) })
+        }
+        if (imageFiles.some(file => file.size > imageLimits.maxImageBytes)) {
           return t('image.fileTooLarge', { size: imageSizeText(imageLimits.maxImageBytes) })
         }
-        const total = attachments.reduce((sum, attachment) => sum + attachment.file.size, 0)
-          + files.reduce((sum, file) => sum + file.size, 0)
-        if (total > imageLimits.maxMessageImageBytes) {
-          return t('image.totalTooLarge', { size: imageSizeText(imageLimits.maxMessageImageBytes) })
+      }
+      if (otherFiles.length > 0 && fileLimits !== undefined) {
+        if (otherFiles.length > fileLimits.maxFilesPerMessage) {
+          return t('file.tooMany', { count: fileLimits.maxFilesPerMessage })
+        }
+        const fileBytes = otherFiles.reduce((sum, file) => sum + file.size, 0)
+        if (fileBytes > fileLimits.maxMessageFileBytes) {
+          return t('file.totalTooLarge', { size: imageSizeText(fileLimits.maxMessageFileBytes) })
+        }
+        if (otherFiles.some(file => file.size > fileLimits.maxFileBytes)) {
+          return t('file.fileTooLarge', { size: imageSizeText(fileLimits.maxFileBytes) })
         }
       }
       return addImages(files)
     })()
     if (rejected !== null) showToast(rejected)
-  }, [addImages, attachments, imageLimits, showToast, t])
+  }, [addImages, attachments, imageLimits, fileLimits, showToast, t])
 
   const canAcceptDrop = !locked && !machineBusy && addImages !== undefined
+  useEffect(() => {
+    const hasFiles = (event: globalThis.DragEvent): boolean =>
+      event.dataTransfer?.types.includes('Files') ?? false
+    const reset = (): void => {
+      dragDepthRef.current = 0
+      setDragActive(false)
+    }
+    const onDragEnter = (event: globalThis.DragEvent): void => {
+      if (!hasFiles(event)) return
+      event.preventDefault()
+      dragDepthRef.current += 1
+      setDragActive(true)
+    }
+    const onDragOver = (event: globalThis.DragEvent): void => {
+      if (!hasFiles(event) || event.dataTransfer === null) return
+      event.preventDefault()
+      event.dataTransfer.dropEffect = canAcceptDrop ? 'copy' : 'none'
+    }
+    const onDragLeave = (event: globalThis.DragEvent): void => {
+      if (!hasFiles(event)) return
+      dragDepthRef.current = Math.max(0, dragDepthRef.current - 1)
+      if (dragDepthRef.current === 0) setDragActive(false)
+      // Leaving through the viewport edge does not balance the count on every
+      // engine; a page-root leave at the border means the drag left the window.
+      const leavingViewport = event.clientX <= 0 || event.clientY <= 0
+        || event.clientX >= window.innerWidth || event.clientY >= window.innerHeight
+      if ((event.target === document.documentElement || event.target === document.body) && leavingViewport) reset()
+    }
+    const onDrop = (event: globalThis.DragEvent): void => {
+      if (!hasFiles(event)) return
+      event.preventDefault()
+      reset()
+      if (!canAcceptDrop) return
+      intakeImages([...(event.dataTransfer?.files ?? [])])
+    }
+    document.addEventListener('dragenter', onDragEnter)
+    document.addEventListener('dragover', onDragOver)
+    document.addEventListener('dragleave', onDragLeave)
+    document.addEventListener('drop', onDrop)
+    window.addEventListener('dragend', reset)
+    return () => {
+      document.removeEventListener('dragenter', onDragEnter)
+      document.removeEventListener('dragover', onDragOver)
+      document.removeEventListener('dragleave', onDragLeave)
+      document.removeEventListener('drop', onDrop)
+      window.removeEventListener('dragend', reset)
+    }
+  }, [canAcceptDrop, intakeImages])
+
+  const closePreview = useCallback(() => { setPreview(null) }, [])
+
+  // Rail thumbnails with their strings resolved here: the attachment atoms are
+  // zero-cordis and read no locale.
+  const railItems = useMemo<ComposerRailItem[]>(() => attachments.map(attachment => ({
+    id: attachment.id,
+    ...attachment.kind === 'image' ? { previewUrl: attachment.previewUrl } : {},
+    alt: attachment.file.name || t('image.pending'),
+    ...attachment.kind === 'file'
+      ? { fileMeta: { name: attachment.file.name, bytes: attachment.file.size } }
+      : {},
+    removeLabel: t('image.remove', { name: attachment.file.name }),
+    attachment,
+  })), [attachments, t])
 
   const onSelect = (e: React.SyntheticEvent<HTMLTextAreaElement>): void => {
     // Any caret/selection gesture ends a live paste attempt (the machine
@@ -604,6 +698,15 @@ export function InputBar({
 
   return (
     <div className={clsx(css.root, variant === 'hero' && css.hero)}>
+      {dragActive && (
+        <DropOverlay
+          disabled={!canAcceptDrop}
+          labels={dropOverlayLabels(t, canAcceptDrop, imageLimits === undefined ? undefined : {
+            count: imageLimits.maxImagesPerMessage,
+            size: imageSizeText(imageLimits.maxImageBytes),
+          })}
+        />
+      )}
       {toast !== null && (
         <Toast
           key={toast.seq}
@@ -632,6 +735,18 @@ export function InputBar({
       >
         {overlay !== undefined && <div className={css.overlayAnchor}>{overlay}</div>}
         {accessory !== undefined && <div className={css.accessory}>{accessory}</div>}
+        {railItems.length > 0 && (
+          <div className={css.attachments}>
+            <AttachmentRail
+              items={railItems}
+              labels={attachmentRailLabels(t)}
+              onOpen={(item) => {
+                if (item.attachment.kind === 'image') setPreview(item.attachment)
+              }}
+              onRemove={(item) => { removeImage?.(item.attachment.id) }}
+            />
+          </div>
+        )}
         {renderSlot('conversation.input.attachments', {
           attachments,
           canAcceptDrop,
@@ -757,6 +872,14 @@ export function InputBar({
           </div>
         </div>
       </div>
+      {preview !== null && (
+        <ImageLightbox
+          src={preview.previewUrl}
+          alt={preview.file.name || t('image.original')}
+          labels={lightboxLabels(t)}
+          onClose={closePreview}
+        />
+      )}
       {footer}
     </div>
   )

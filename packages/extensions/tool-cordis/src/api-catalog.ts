@@ -431,6 +431,11 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         parameters: [],
       },
       {
+        signature: 'readonly fileLimits: FileAttachmentLimits = { maxFileBytes: Number.MAX_SAFE_INTEGER, maxFilesPerMessage: Number.MAX_SAFE_INTEGER, maxMessageFileBytes: Number.MAX_SAFE_INTEGER, denyMediaTypes: [], }',
+        description: 'Deployment-resolved generic-file policy used by authoritative validation. The permissive fallback keeps image-only stores and test doubles compiling unchanged; the default file methods below throw `FILE_STORAGE_UNSUPPORTED` when a file is actually admitted.',
+        parameters: [],
+      },
+      {
         signature: 'abstract validateImage(input: SaveImageAttachment): Promise<void>',
         description: 'Validate one image without persisting it. Batch callers validate every member before saving any member.',
         parameters: [{ name: 'input', description: 'encoded bytes, declared media type, and optional display name.' }],
@@ -452,6 +457,25 @@ export const SERVICE_API: readonly ServiceApiEntry[] = [
         signature: 'abstract readImage(ref: ImageAttachmentRef, signal?: AbortSignal): Promise<StoredImageAttachment>',
         description: 'Read one image and verify that bytes still match the recorded reference.',
         parameters: [{ name: 'ref', description: 'durable reference from the session log.' }, { name: 'signal', description: 'optional cancellation for backend read and verification work.' }],
+        returns: 'the verified bytes and canonical reference.',
+        throws: ['the signal reason when aborted, or a storage error when verification fails.'],
+      },
+      {
+        signature: 'validateFile(_input: SaveFileAttachment): Promise<void>',
+        description: 'Validate one non-image file without persisting it. Batch callers validate every member before saving any member.',
+        parameters: [{ name: '_input', description: 'encoded bytes, declared media type, and optional display name.' }],
+        returns: 'completion after the admission policy has been applied.',
+      },
+      {
+        signature: 'saveFile(_input: SaveFileAttachment): Promise<FileAttachmentRef>',
+        description: 'Validate and durably commit one non-image file before its owning session event is appended.',
+        parameters: [{ name: '_input', description: 'encoded bytes, declared media type, and optional display name.' }],
+        returns: 'a durable content-addressed reference.',
+      },
+      {
+        signature: 'readFile(_ref: FileAttachmentRef, _signal?: AbortSignal): Promise<StoredFileAttachment>',
+        description: 'Read one non-image file and verify that bytes still match the recorded reference.',
+        parameters: [{ name: '_ref', description: 'durable reference from the session log.' }, { name: '_signal', description: 'optional cancellation for backend read and verification work.' }],
         returns: 'the verified bytes and canonical reference.',
         throws: ['the signal reason when aborted, or a storage error when verification fails.'],
       },
@@ -2942,7 +2966,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'ContentBlockMap',
-    declaration: 'export interface ContentBlockMap {\n    \'text\': TextBlock;\n    \'reasoning\': ReasoningBlock;\n    \'image\': ImageBlock;\n    \'tool-call\': ToolCallBlock;\n    \'tool-result\': ToolResultBlock;\n}',
+    declaration: 'export interface ContentBlockMap {\n    \'text\': TextBlock;\n    \'reasoning\': ReasoningBlock;\n    \'image\': ImageBlock;\n    \'file\': FileBlock;\n    \'tool-call\': ToolCallBlock;\n    \'tool-result\': ToolResultBlock;\n}',
   },
   {
     name: 'ContentBlockType',
@@ -3149,12 +3173,28 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface EpochHeader {\n    config: LlmCallConfig;\n    adapterDefaults?: LlmCallConfigAdapterDefaults;\n    system?: string;\n    tools?: ToolSchema[];\n}',
   },
   {
+    name: 'FileAttachmentLimits',
+    declaration: 'export interface FileAttachmentLimits {\n    maxFileBytes: number;\n    maxFilesPerMessage: number;\n    maxMessageFileBytes: number;\n    allowedMediaTypes?: readonly string[];\n    denyMediaTypes?: readonly string[];\n}',
+  },
+  {
+    name: 'FileAttachmentRef',
+    declaration: 'export interface FileAttachmentRef {\n    attachmentId: AttachmentId;\n    mediaType: FileMediaType;\n    bytes: number;\n    name?: string;\n}',
+  },
+  {
+    name: 'FileBlock',
+    declaration: 'export interface FileBlock {\n    type: \'file\';\n    attachment: FileAttachmentRef;\n    text?: string;\n}',
+  },
+  {
     name: 'FileDiff',
     declaration: 'export interface FileDiff {\n    path: string;\n    oldText: string | null;\n    newText: string;\n}',
   },
   {
     name: 'FileLocation',
     declaration: 'export interface FileLocation {\n    path: string;\n    line?: number;\n}',
+  },
+  {
+    name: 'FileMediaType',
+    declaration: 'export type FileMediaType = string;',
   },
   {
     name: 'FileReferenceCandidate',
@@ -3801,6 +3841,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
     declaration: 'export interface SandboxPolicyRequest {\n    session?: Session;\n    mode?: SandboxMode;\n}',
   },
   {
+    name: 'SaveFileAttachment',
+    declaration: 'export interface SaveFileAttachment {\n    data: Uint8Array;\n    mediaType: FileMediaType;\n    name?: string;\n}',
+  },
+  {
     name: 'SaveImageAttachment',
     declaration: 'export interface SaveImageAttachment {\n    data: Uint8Array;\n    mediaType: ImageMediaType;\n    name?: string;\n}',
   },
@@ -4231,6 +4275,10 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   {
     name: 'StorageForms',
     declaration: 'export interface StorageForms {\n}',
+  },
+  {
+    name: 'StoredFileAttachment',
+    declaration: 'export interface StoredFileAttachment {\n    ref: FileAttachmentRef;\n    data: Uint8Array;\n}',
   },
   {
     name: 'StoredImageAttachment',
@@ -4710,7 +4758,7 @@ export const TYPE_API: readonly TypeApiEntry[] = [
   },
   {
     name: 'UserMessage',
-    declaration: 'export interface UserMessage extends Message {\n    readonly role: \'user\';\n}',
+    declaration: 'export interface UserMessage extends Message {\n    readonly role: \'user\';\n    readonly surfaceReplace?: {\n        readonly start: number;\n        readonly end: number;\n    };\n    readonly surfaceSourceSeqs?: readonly number[];\n}',
   },
   {
     name: 'UserQuestionProvider',

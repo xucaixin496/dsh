@@ -16,6 +16,14 @@
   min-width: 0;
   max-width: min(525px, 82%);
 }
+
+.fileList {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  max-width: 100%;
+}
 .bubble {
   /* 525px cap inside the 736 column; percentage keeps narrow windows sane. */
   max-width: 100%;
@@ -28,11 +36,159 @@
   color: var(--dsw-alias-label-primary);
 }
 
-.referenceSummary {
+/* In-bubble edit mode: the bubble hosts a textarea and a send/cancel footer
+   instead of the projected text (attachments stay visible above). */
+.bubbleEditing {
+  padding: 6px 8px 6px 10px;
+}
+
+.editInput {
+  box-sizing: border-box;
+  display: block;
+  width: 100%;
+  min-height: 72px;
+  max-height: 200px;
+  resize: none;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--dsw-alias-label-primary);
+  caret-color: var(--dsw-alias-state-business-primary);
+  font: inherit;
+  line-height: 24px;
+  overflow-y: auto;
+  /* Scrollbar tokens for the elevated bubble surface. */
+  --dsh-scrollbar-thumb: var(--dsw-alias-scrollbar-bg-l2);
+  --dsh-scrollbar-thumb-hover: var(--dsw-alias-scrollbar-hover-l2);
+}
+
+.editInput::placeholder {
+  color: var(--dsw-alias-label-caption);
+  user-select: none;
+}
+
+.editFooter {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.editShortcut {
+  flex: none;
   color: var(--dsw-alias-label-tertiary);
   font-size: 12px;
   line-height: 18px;
 }
+
+.editSpacer {
+  flex: 1 1 auto;
+}
+
+.editAttachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.editAttachmentChip {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.editAttachmentRemove {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 18px;
+  height: 18px;
+  margin-left: -4px;
+  border: none;
+  border-radius: 999px;
+  background: var(--dsw-alias-bg-layer-1);
+  color: var(--dsw-alias-label-secondary);
+  cursor: pointer;
+}
+
+.editAttachmentRemove:hover {
+  color: var(--dsw-alias-state-error-primary);
+}
+
+.editAttach {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+  height: 26px;
+  padding: 0 10px;
+  border: 1px solid var(--dsw-alias-border-l2-darkmode-thin);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--dsw-alias-label-secondary);
+  font-size: 12px;
+  line-height: 26px;
+  cursor: pointer;
+}
+
+.editAttach:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+.visuallyHidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.editCancel {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+  height: 26px;
+  padding: 0 10px;
+  border: 1px solid var(--dsw-alias-border-l2-darkmode-thin);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--dsw-alias-label-secondary);
+  font-size: 12px;
+  line-height: 26px;
+  cursor: pointer;
+}
+
+.editCancel:hover {
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
+.editSend {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 26px;
+  height: 26px;
+  border: none;
+  border-radius: 999px;
+  background: var(--dsw-alias-button-info-fill);
+  color: #fff;
+  cursor: pointer;
+  transition: background-color 100ms ease;
+}
+
+.editSend:hover:not(:disabled) {
+  background: var(--dsw-alias-button-info-hover);
+}
+
+.editSend:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
 .contextRow {
   padding: 2px 0;
 }

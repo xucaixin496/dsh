@@ -7,6 +7,7 @@ import ToolRuntime, { defineContentToolFixture } from '@deepseek-ai/dsh-tools'
 import AgentRegistry, { type Agent } from '@deepseek-ai/dsh-agent'
 
 import AgentLoop from '@deepseek-ai/dsh-agent-loop'
+import { foldSurface } from '@deepseek-ai/dsh-session/surface'
 import { MockAdapter, maxTokensResponse, textResponse, toolCallResponse } from './mock-adapter.ts'
 
 function driverDone(agent: Agent): Promise<void> {
@@ -193,6 +194,58 @@ describe('agent loop', () => {
     const messages = agent.session.deriveMessages()
     expect(messages.map(m => m.role)).toEqual(['user', 'assistant'])
     expect(messages[1]!.content).toEqual([{ type: 'text', text: 'hello there' }])
+  })
+
+  it('lands a followup as a surface replacement when the message requests one', async () => {
+    const adapter = new MockAdapter([textResponse('first'), textResponse('second'), textResponse('regenerated')])
+    const ctx = await harness(adapter)
+    const agent = ctx.agentLoop.create(SessionId('a1'), { provider: 'mock', model: 'mock' })
+
+    send(agent, 'one')
+    await waitForIdle(ctx, agent)
+    send(agent, 'two')
+    await waitForIdle(ctx, agent)
+
+    const userSeqs = agent.session.events
+      .filter(e => e.type === 'user/message').map(e => e.seq)
+    const assistantSeqs = agent.session.events
+      .filter(e => e.type === 'assistant/message').map(e => e.seq)
+    const start = userSeqs[1]
+    const end = assistantSeqs[1]
+    if (start === undefined || end === undefined) throw new Error('two completed turns were not recorded')
+    const shadowed = [start, end]
+
+    agent.followup(createUserMessage({
+      content: [{ type: 'text', text: 'two (edited)' }],
+      source: { kind: 'user' },
+      surfaceReplace: { start, end },
+      surfaceSourceSeqs: shadowed,
+    }))
+    await waitForIdle(ctx, agent)
+
+    const landed = agent.session.events.findLast(e => e.type === 'user/message')
+    if (landed?.type !== 'user/message') throw new Error('replacement user message was not appended')
+    expect(landed.surfaceOp).toEqual({ op: 'replace', start, end })
+    expect(landed.sourceEventSeqs).toEqual(shadowed)
+    // The durable message projection never carries the admission metadata.
+    expect(landed.data).not.toHaveProperty('surfaceReplace')
+    expect(landed.data).not.toHaveProperty('surfaceSourceSeqs')
+    // The model surface folds to the first turn plus the replacement tail.
+    const nodes = foldSurface(agent.session.events).nodes
+    expect(nodes).not.toContain(start)
+    expect(nodes).not.toContain(end)
+    expect(nodes).toContain(landed.seq)
+    const finalAssistant = agent.session.events
+      .filter(e => e.type === 'assistant/message').at(-1)?.seq
+    expect(nodes.at(-1)).toBe(finalAssistant)
+    // The regenerated request carries the edited text.
+    const lastRequest = adapter.requests.at(-1)
+    const wireTexts = lastRequest?.messages
+      ?.filter(m => m.role === 'user')
+      .flatMap(m => m.content)
+      .filter((block): block is { type: 'text'; text: string } => block.type === 'text')
+      .map(block => block.text)
+    expect(wireTexts).toContain('two (edited)')
   })
 
   it('round-trips tool calls: model requests tool → executes → result in next request', async () => {

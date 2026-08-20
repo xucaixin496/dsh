@@ -2,9 +2,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
 import { AttachmentId, AttachmentStore } from '@deepseek-ai/dsh-attachment'
 import type {
+  FileAttachmentLimits,
+  FileAttachmentRef,
   ImageAttachmentLimits,
   ImageAttachmentRef,
   SaveImageAttachment,
+  StoredFileAttachment,
   StoredImageAttachment,
 } from '@deepseek-ai/dsh-attachment'
 import LlmRuntime, { createUserMessage, CONTEXT_WINDOW_EXCEEDED_CODE, LlmError, ReasoningEffortId, userAgent } from '@deepseek-ai/dsh-llm'
@@ -220,6 +223,23 @@ describe('PiAiAdapter provider routing', () => {
         maxImageDimension: 2000,
         mediaTypes: ['image/png'],
       }
+      override readonly fileLimits: FileAttachmentLimits = {
+        maxFileBytes: 1,
+        maxFilesPerMessage: 1,
+        maxMessageFileBytes: 1,
+      }
+
+      override validateFile(): Promise<void> {
+        return Promise.reject(new Error('not used'))
+      }
+
+      override saveFile(): Promise<FileAttachmentRef> {
+        return Promise.reject(new Error('not used'))
+      }
+
+      override readFile(): Promise<StoredFileAttachment> {
+        return Promise.reject(new Error('not used'))
+      }
 
       validateImage(_input: SaveImageAttachment): Promise<void> {
         return Promise.reject(new Error('not used'))
@@ -252,6 +272,70 @@ describe('PiAiAdapter provider routing', () => {
 
     expect(result.finish.kind).toBe('error')
     expect(readImage).toHaveBeenCalledWith(ref)
+    expect(server.paths).toEqual(['/v1/responses'])
+  })
+
+  it('resolves attachments for file-only messages so their text reaches the wire', async () => {
+    const server = await mockServer([{ status: 401, body: JSON.stringify({ error: { message: 'expected mock failure' } }) }])
+    const fileRef: FileAttachmentRef = {
+      attachmentId: AttachmentId(`sha256:${'c'.repeat(64)}`),
+      mediaType: 'application/pdf',
+      bytes: 4,
+      name: 'a.pdf',
+    }
+    class FileAttachmentStore extends AttachmentStore {
+      readonly imageLimits: ImageAttachmentLimits = {
+        maxImageBytes: 1,
+        maxImagesPerMessage: 1,
+        maxMessageImageBytes: 1,
+        maxImagePixels: 1,
+        maxImageDimension: 1,
+        mediaTypes: ['image/png'],
+      }
+      override readonly fileLimits: FileAttachmentLimits = {
+        maxFileBytes: 1,
+        maxFilesPerMessage: 1,
+        maxMessageFileBytes: 1,
+      }
+      override validateFile(): Promise<void> {
+        return Promise.resolve()
+      }
+      override saveFile(): Promise<FileAttachmentRef> {
+        return Promise.resolve(fileRef)
+      }
+      override readFile(): Promise<StoredFileAttachment> {
+        return Promise.reject(new Error('not used'))
+      }
+      validateImage(_input: SaveImageAttachment): Promise<void> {
+        return Promise.reject(new Error('not used'))
+      }
+      saveImage(_input: SaveImageAttachment): Promise<ImageAttachmentRef> {
+        return Promise.reject(new Error('not used'))
+      }
+      readImage(_value: ImageAttachmentRef): Promise<StoredImageAttachment> {
+        return Promise.reject(new Error('not used'))
+      }
+    }
+
+    const ctx = new Context()
+    await ctx.plugin(LlmRuntime)
+    await ctx.plugin(LlmPiAi, {
+      providers: { openai: { apiKeyEnv: 'PI_TEST_KEY', baseURL: `${server.url}/v1` } },
+    })
+    await ctx.plugin(FileAttachmentStore)
+
+    const result = await assemble(ctx, {
+      provider: 'openai',
+      model: 'gpt-4.1',
+      messages: [createUserMessage({
+        content: [{ type: 'file', attachment: fileRef, text: 'extracted pdf text' }],
+        source: { kind: 'plugin', plugin: 'test' },
+      })],
+    })
+
+    expect(result.finish.kind).toBe('error')
+    expect(JSON.stringify(server.requests[0] ?? {}))
+      .toContain('extracted pdf text')
     expect(server.paths).toEqual(['/v1/responses'])
   })
 

@@ -4,11 +4,21 @@ import { join, resolve } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import { AttachmentStore } from '@deepseek-ai/dsh-attachment'
-import type { ImageAttachmentLimits, ImageAttachmentRef, SaveImageAttachment, StoredImageAttachment } from '@deepseek-ai/dsh-attachment'
+import type {
+  FileAttachmentLimits,
+  FileAttachmentRef,
+  ImageAttachmentLimits,
+  ImageAttachmentRef,
+  SaveFileAttachment,
+  SaveImageAttachment,
+  StoredFileAttachment,
+  StoredImageAttachment,
+} from '@deepseek-ai/dsh-attachment'
 import { resolveDshHome } from '@deepseek-ai/dsh-home-paths'
-import { readImageFile, saveImageFile, validateImageFile } from './store.ts'
+import { readFileFile, readImageFile, saveFileFile, saveImageFile, validateFileFile, validateImageFile } from './store.ts'
 
-export { readImageFile, saveImageFile, validateImageFile } from './store.ts'
+export { detectImage } from './image.ts'
+export { readFileFile, readImageFile, saveFileFile, saveImageFile, validateFileFile, validateImageFile } from './store.ts'
 
 /** Default maximum encoded bytes for one image. */
 export const DEFAULT_MAX_IMAGE_BYTES = 3.5 * 1024 * 1024
@@ -18,6 +28,12 @@ export const DEFAULT_MAX_IMAGES_PER_MESSAGE = 20
 export const DEFAULT_MAX_MESSAGE_IMAGE_BYTES = 100 * 1024 * 1024
 /** Default maximum intrinsic pixels for one image. */
 export const DEFAULT_MAX_IMAGE_PIXELS = 40_000_000
+/** Default maximum encoded bytes for one generic file. */
+export const DEFAULT_MAX_FILE_BYTES = 50 * 1024 * 1024
+/** Default maximum generic files in one prompt. */
+export const DEFAULT_MAX_FILES_PER_MESSAGE = 20
+/** Default maximum aggregate generic-file bytes in one prompt. */
+export const DEFAULT_MAX_MESSAGE_FILE_BYTES = 200 * 1024 * 1024
 /**
  * Default maximum intrinsic width and height for one image. Deployed model
  * routes reject any request whose history carries an image with a side above
@@ -39,6 +55,16 @@ export interface Config {
   maxMessageImageBytes?: number
   /** Maximum intrinsic width multiplied by height accepted for one image. */
   maxImagePixels?: number
+  /** Maximum encoded bytes accepted for one generic file. */
+  maxFileBytes?: number
+  /** Maximum generic-file count accepted in one submitted message. */
+  maxFilesPerMessage?: number
+  /** Maximum aggregate generic-file bytes accepted in one submitted message. */
+  maxMessageFileBytes?: number
+  /** Optional explicit generic-file media-type allow list. */
+  allowedMediaTypes?: string[]
+  /** Generic-file media-type deny list; defaults to audio/video. */
+  denyMediaTypes?: string[]
   /** Maximum intrinsic width and maximum intrinsic height accepted for one image. */
   maxImageDimension?: number
 }
@@ -51,12 +77,18 @@ export class LocalAttachmentStore extends AttachmentStore {
     maxImagesPerMessage: z.number().step(1).min(1).default(DEFAULT_MAX_IMAGES_PER_MESSAGE),
     maxMessageImageBytes: z.number().step(1).min(1).default(DEFAULT_MAX_MESSAGE_IMAGE_BYTES),
     maxImagePixels: z.number().step(1).min(1).default(DEFAULT_MAX_IMAGE_PIXELS),
+    maxFileBytes: z.number().step(1).min(1).default(DEFAULT_MAX_FILE_BYTES),
+    maxFilesPerMessage: z.number().step(1).min(1).default(DEFAULT_MAX_FILES_PER_MESSAGE),
+    maxMessageFileBytes: z.number().step(1).min(1).default(DEFAULT_MAX_MESSAGE_FILE_BYTES),
+    allowedMediaTypes: z.array(z.string()).default([]),
+    denyMediaTypes: z.array(z.string()).default(['audio/*', 'video/*']),
     maxImageDimension: z.number().step(1).min(1).default(DEFAULT_MAX_IMAGE_DIMENSION),
   })
 
   /** Absolute versioned storage root. */
   readonly root: string
   readonly imageLimits: ImageAttachmentLimits
+  override readonly fileLimits: FileAttachmentLimits
 
   constructor(ctx: Context, config: Config) {
     super(ctx)
@@ -68,6 +100,17 @@ export class LocalAttachmentStore extends AttachmentStore {
       maxImagePixels: config.maxImagePixels ?? DEFAULT_MAX_IMAGE_PIXELS,
       maxImageDimension: config.maxImageDimension ?? DEFAULT_MAX_IMAGE_DIMENSION,
       mediaTypes: Object.freeze(['image/png', 'image/jpeg', 'image/webp', 'image/gif'] as const),
+    })
+    const denyMediaTypes = config.denyMediaTypes ?? ['audio/*', 'video/*']
+    const allowedMediaTypes = config.allowedMediaTypes
+    this.fileLimits = Object.freeze({
+      maxFileBytes: config.maxFileBytes ?? DEFAULT_MAX_FILE_BYTES,
+      maxFilesPerMessage: config.maxFilesPerMessage ?? DEFAULT_MAX_FILES_PER_MESSAGE,
+      maxMessageFileBytes: config.maxMessageFileBytes ?? DEFAULT_MAX_MESSAGE_FILE_BYTES,
+      ...(allowedMediaTypes !== undefined && allowedMediaTypes.length > 0
+        ? { allowedMediaTypes: Object.freeze([...allowedMediaTypes]) }
+        : {}),
+      denyMediaTypes: Object.freeze([...denyMediaTypes]),
     })
   }
 
@@ -81,6 +124,18 @@ export class LocalAttachmentStore extends AttachmentStore {
 
   async readImage(ref: ImageAttachmentRef, signal?: AbortSignal): Promise<StoredImageAttachment> {
     return readImageFile(this.root, ref, signal)
+  }
+
+  override async validateFile(input: SaveFileAttachment): Promise<void> {
+    await validateFileFile(input, this.fileLimits)
+  }
+
+  override async saveFile(input: SaveFileAttachment): Promise<FileAttachmentRef> {
+    return saveFileFile(this.root, input, this.fileLimits)
+  }
+
+  override async readFile(ref: FileAttachmentRef, signal?: AbortSignal): Promise<StoredFileAttachment> {
+    return readFileFile(this.root, ref, signal)
   }
 }
 

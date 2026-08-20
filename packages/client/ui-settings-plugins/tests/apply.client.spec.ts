@@ -83,6 +83,9 @@ describe('ui-settings-plugins apply', () => {
     const tab = slots.entries('settings.plugins.tab')[0]!
     expect(tab.options).toMatchObject({ id: 'configurable', order: 0 })
     expect(resolveSlotLabel(tab.options.label)).toBe('插件配置')
+    const store = slots.entries('settings.plugins.tab')[1]!
+    expect(store.options).toMatchObject({ id: 'store', order: 20 })
+    expect(resolveSlotLabel(store.options.label)).toBe('插件商店')
     expect(slots.spec('settings.plugin.item')).toMatchObject({ kind: 'keyed', scope: 'root' })
   })
 
@@ -97,6 +100,7 @@ describe('ui-settings-plugins apply', () => {
     const initialTabs = sectionFace.hooks.tabs.getSnapshot()
     expect(initialTabs).toEqual([
       { id: 'configurable', order: 0, label: '插件配置' },
+      { id: 'store', order: 20, label: '插件商店' },
     ])
     expect(sectionFace.hooks.tabs.getSnapshot()).toBe(initialTabs)
 
@@ -106,6 +110,7 @@ describe('ui-settings-plugins apply', () => {
     expect(sectionFace.hooks.tabs.getSnapshot()).toEqual([
       { id: 'configurable', order: 0, label: '插件配置' },
       { id: 'plain', order: 0, label: '' },
+      { id: 'store', order: 20, label: '插件商店' },
     ])
     unsubscribe()
 

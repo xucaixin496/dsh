@@ -5,6 +5,12 @@ import { Context } from '@deepseek-ai/cordis'
 import AgentRegistry, { agentEvents } from '@deepseek-ai/dsh-agent'
 import type { Agent, AgentHandle, CreateAgentOptions } from '@deepseek-ai/dsh-agent'
 import { createUserMessage, ReasoningEffortId } from '@deepseek-ai/dsh-llm'
+import { AttachmentId } from '@deepseek-ai/dsh-attachment'
+import { AttachmentStore } from '@deepseek-ai/dsh-attachment'
+import type {
+  FileAttachmentLimits, FileAttachmentRef, ImageAttachmentLimits, ImageAttachmentRef,
+  SaveImageAttachment, StoredFileAttachment, StoredImageAttachment,
+} from '@deepseek-ai/dsh-attachment'
 import type { LlmCallConfig } from '@deepseek-ai/dsh-llm'
 import SessionStore from '@deepseek-ai/dsh-session'
 import type { Session, SessionEvent, SessionHeader, SessionId } from '@deepseek-ai/dsh-session'
@@ -14,6 +20,7 @@ import type { Workspace } from '@deepseek-ai/dsh-workspace'
 import type { RpcRequest } from '@deepseek-ai/dsh-host-apiproxy/api/rpc'
 import { RpcId } from '@deepseek-ai/dsh-host-apiproxy/api/rpc'
 import { createApiProxy } from '@deepseek-ai/dsh-host-apiproxy'
+import { foldSurface } from '@deepseek-ai/dsh-session/surface'
 
 const sid = (id: string): SessionId => id as SessionId
 
@@ -37,7 +44,13 @@ async function composed(workspaces: readonly Workspace[] = []): Promise<Context>
       })
       const agent = {} as Agent
       const agentCtx = ownerCtx.extend({ agent })
-      Object.assign(agent, { id: session.id, session, status: 'idle', ctx: agentCtx })
+      Object.assign(agent, {
+        id: session.id,
+        session,
+        status: 'idle',
+        ctx: agentCtx,
+        followup: vi.fn() as unknown as Agent['followup'],
+      })
       await options.setup?.(agentCtx)
       ctx.agents.register(agent)
       return { agent, dispose: () => Promise.resolve() }
@@ -77,7 +90,10 @@ function liveAgent(
       reason: { kind: 'aborted', reason: { kind: 'user' } },
     })
   }
-  ctx.agents.register({ id: session.id, session, status: 'idle', ctx } as Agent)
+  ctx.agents.register({
+    id: session.id, session, status: 'idle', ctx,
+    followup: vi.fn() as unknown as Agent['followup'],
+  } as Agent)
   return session
 }
 
@@ -250,6 +266,289 @@ describe('sessions.fork', () => {
       error: { code: 'fork-unavailable', details: { sessionId: source.id } },
     })
     if (!response.result.ok) expect(response.result.error.message).toMatch(/has not completed/)
+    await ctx.fiber.dispose()
+  })
+
+  it('cuts exclusively before the turn containing a beforeTurnSeq anchor', async () => {
+    const ctx = await composed()
+    const source = liveAgent(ctx, 'session-exclusive', 3)
+    // Turn 2's user/message event (turn 1 is fully complete before it).
+    const userSeqs = source.events.filter(event => event.type === 'user/message').map(event => event.seq)
+    const anchor = userSeqs[1]
+    expect(anchor).toBeDefined()
+    if (anchor === undefined) return
+    const response = await api(ctx).sessions.fork(request({ sessionId: source.id, beforeTurnSeq: anchor }))
+    expect(response.result.ok).toBe(true)
+    if (!response.result.ok) return
+    expect(ctx.sessions.get(response.result.value.sessionId)?.events.map(event => event.type)).toEqual([
+      'turn/start', 'user/message', 'turn/end', 'session/end-seed',
+    ])
+    await ctx.fiber.dispose()
+  })
+
+  it('forks an empty child for an anchor in the first turn', async () => {
+    const ctx = await composed()
+    const source = liveAgent(ctx, 'session-first-exclusive', 2)
+    const userSeqs = source.events.filter(event => event.type === 'user/message').map(event => event.seq)
+    const anchor = userSeqs[0]
+    expect(anchor).toBeDefined()
+    if (anchor === undefined) return
+    const response = await api(ctx).sessions.fork(request({ sessionId: source.id, beforeTurnSeq: anchor }))
+    expect(response.result.ok).toBe(true)
+    if (!response.result.ok) return
+    const child = ctx.sessions.get(response.result.value.sessionId)
+    expect(child?.events.some(event => event.type === 'turn/start')).toBe(false)
+    expect(child?.events.map(event => event.type)).toEqual(['session/end-seed'])
+    await ctx.fiber.dispose()
+  })
+
+  it('rejects a beforeTurnSeq anchor past the log end', async () => {
+    const ctx = await composed()
+    const source = liveAgent(ctx, 'session-exclusive-past', 1)
+    const response = await api(ctx).sessions.fork(request({ sessionId: source.id, beforeTurnSeq: 999 }))
+    expect(response.result).toMatchObject({
+      ok: false,
+      error: { code: 'fork-unavailable', details: { sessionId: source.id } },
+    })
+    await ctx.fiber.dispose()
+  })
+
+  it('rejects combining atSeq and beforeTurnSeq', async () => {
+    const ctx = await composed()
+    const source = liveAgent(ctx, 'session-both-anchors', 1)
+    const response = await api(ctx).sessions.fork(request({ sessionId: source.id, atSeq: 1, beforeTurnSeq: 1 }))
+    expect(response.result).toMatchObject({
+      ok: false,
+      error: { code: 'invalid-request' },
+    })
+    await ctx.fiber.dispose()
+  })
+
+  it('regenerates in place: shadows the anchored range and reuses original content', async () => {
+    const ctx = await composed()
+    const source = liveAgent(ctx, 'session-regenerate', 3)
+    const userSeqs = source.events.filter(event => event.type === 'user/message').map(event => event.seq)
+    const target = userSeqs[1]
+    expect(target).toBeDefined()
+    if (target === undefined) return
+    const nodes = foldSurface(source.events).nodes
+    const response = await api(ctx).sessions.regenerate(request({ sessionId: source.id, atSeq: target }))
+    expect(response.result.ok).toBe(true)
+    if (!response.result.ok) return
+    const followup = (ctx.agents.get(source.id)?.followup ?? vi.fn()) as unknown as ReturnType<typeof vi.fn>
+    expect(followup).toHaveBeenCalledTimes(1)
+    const message = followup.mock.calls[0]?.[0] as {
+      surfaceReplace?: { start: number; end: number }
+      surfaceSourceSeqs?: readonly number[]
+      content: readonly { type: string; text: string }[]
+    }
+    expect(message.surfaceReplace).toEqual({ start: target, end: nodes[nodes.length - 1] })
+    expect(message.surfaceSourceSeqs).toEqual(nodes.slice(1))
+    expect(message.content).toEqual([{ type: 'text', text: 'prompt 2' }])
+    await ctx.fiber.dispose()
+  })
+
+  it('regenerate replaces text with edited text and keeps non-text blocks', async () => {
+    const ctx = await composed()
+    const source = liveAgent(ctx, 'session-regenerate-edit', 2)
+    const userSeqs = source.events.filter(event => event.type === 'user/message').map(event => event.seq)
+    const target = userSeqs[0]
+    expect(target).toBeDefined()
+    if (target === undefined) return
+    const response = await api(ctx).sessions.regenerate(request({
+      sessionId: source.id, atSeq: target, text: 'edited first prompt',
+    }))
+    expect(response.result.ok).toBe(true)
+    if (!response.result.ok) return
+    const followup = (ctx.agents.get(source.id)?.followup ?? vi.fn()) as unknown as ReturnType<typeof vi.fn>
+    const message = followup.mock.calls[0]?.[0] as { content: readonly { type: string; text?: string }[] }
+    expect(message.content).toEqual([{ type: 'text', text: 'edited first prompt' }])
+    await ctx.fiber.dispose()
+  })
+
+  it('rejects regenerate while a turn is open or the agent is running', async () => {
+    const ctx = await composed()
+    const proxy = api(ctx)
+    const source = liveAgent(ctx, 'session-regenerate-open', 1, 'open')
+    const userSeqs = source.events.filter(event => event.type === 'user/message').map(event => event.seq)
+    const busy = await proxy.sessions.regenerate(request({ sessionId: source.id, atSeq: userSeqs[0] ?? 0 }))
+    expect(busy.result).toMatchObject({ ok: false, error: { code: 'agent-busy' } })
+
+    const running = liveAgent(ctx, 'session-regenerate-running', 1)
+    const runningAgent = ctx.agents.get(running.id)
+    Object.assign(runningAgent ?? {}, { status: 'running' })
+    const runningUserSeqs = running.events.filter(event => event.type === 'user/message').map(event => event.seq)
+    const refused = await proxy.sessions.regenerate(request({
+      sessionId: running.id, atSeq: runningUserSeqs[0] ?? 0,
+    }))
+    expect(refused.result).toMatchObject({ ok: false, error: { code: 'agent-busy' } })
+    await ctx.fiber.dispose()
+  })
+
+  it('rejects regenerate for an anchor that is not a user message', async () => {
+    const ctx = await composed()
+    const source = liveAgent(ctx, 'session-regenerate-bad-anchor', 1)
+    const turnEnd = source.events.findLast(event => event.type === 'turn/end')
+    const response = await api(ctx).sessions.regenerate(request({
+      sessionId: source.id, atSeq: turnEnd?.seq ?? 0,
+    }))
+    expect(response.result).toMatchObject({ ok: false, error: { code: 'invalid-request' } })
+    await ctx.fiber.dispose()
+  })
+
+  it('regenerate keeps file attachments verbatim on plain and edited resends', async () => {
+    const ctx = await composed()
+    const session = ctx.sessions.create(sid('session-regenerate-file'), { meta: { cwd: '/proj' } })
+    session.append('turn/start', { turn: 1 })
+    session.append('user/message', createUserMessage({
+      content: [
+        { type: 'text', text: 'read this' },
+        {
+          type: 'file',
+          attachment: {
+            attachmentId: AttachmentId(`sha256:${'f'.repeat(64)}`),
+            mediaType: 'application/pdf',
+            bytes: 3,
+            name: 'a.pdf',
+          },
+          text: 'pdf text',
+        },
+      ],
+      source: { kind: 'user' },
+    }), { surfaceOp: 'append' })
+    session.append('turn/end', { turn: 1, reason: { kind: 'completed' } })
+    ctx.agents.register({
+      id: session.id, session, status: 'idle', ctx,
+      followup: vi.fn() as unknown as Agent['followup'],
+    } as Agent)
+    const userSeq = session.events.find(event => event.type === 'user/message')?.seq
+    expect(userSeq).toBeDefined()
+    if (userSeq === undefined) return
+
+    const proxy = api(ctx)
+    const followup = (ctx.agents.get(session.id)?.followup ?? vi.fn()) as unknown as ReturnType<typeof vi.fn>
+
+    const plain = await proxy.sessions.regenerate(request({ sessionId: session.id, atSeq: userSeq }))
+    expect(plain.result.ok).toBe(true)
+    if (plain.result.ok) {
+      const message = followup.mock.calls[0]?.[0] as {
+        content: readonly { type: string; text?: string; attachment?: { attachmentId: string } }[]
+      }
+      expect(message.content.map(block => block.type)).toEqual(['text', 'file'])
+      expect(message.content[1]?.attachment?.attachmentId).toContain('ffff')
+    }
+
+    const edited = await proxy.sessions.regenerate(request({
+      sessionId: session.id, atSeq: userSeq, text: 'edited',
+    }))
+    expect(edited.result.ok).toBe(true)
+    if (edited.result.ok) {
+      const message = followup.mock.calls[1]?.[0] as {
+        content: readonly { type: string; text?: string; attachment?: { attachmentId: string } }[]
+      }
+      expect(message.content.map(block => block.type)).toEqual(['text', 'file'])
+      expect(message.content[0]).toMatchObject({ type: 'text', text: 'edited' })
+    }
+    await ctx.fiber.dispose()
+  })
+
+  it('regenerate drops removed attachment ids and uploads additions', async () => {
+    const ctx = await composed()
+    const session = ctx.sessions.create(sid('session-regenerate-attachments'), { meta: { cwd: '/proj' } })
+    const fileId = `sha256:${'f'.repeat(64)}`
+    session.append('turn/start', { turn: 1 })
+    session.append('user/message', createUserMessage({
+      content: [
+        { type: 'text', text: 'read this' },
+        {
+          type: 'file',
+          attachment: { attachmentId: AttachmentId(fileId), mediaType: 'application/pdf', bytes: 3, name: 'a.pdf' },
+          text: 'pdf text',
+        },
+      ],
+      source: { kind: 'user' },
+    }), { surfaceOp: 'append' })
+    session.append('turn/end', { turn: 1, reason: { kind: 'completed' } })
+    ctx.agents.register({
+      id: session.id, session, status: 'idle', ctx,
+      followup: vi.fn() as unknown as Agent['followup'],
+    } as Agent)
+    const userSeq = session.events.find(event => event.type === 'user/message')?.seq
+    expect(userSeq).toBeDefined()
+    if (userSeq === undefined) return
+
+    // Minimal attachment store so the additions upload path can save bytes.
+    const savedIds: string[] = []
+    class FakeAttachmentStore extends AttachmentStore {
+      readonly imageLimits: ImageAttachmentLimits = {
+        maxImageBytes: 1_000_000, maxImagesPerMessage: 10, maxMessageImageBytes: 10_000_000,
+        maxImagePixels: 40_000_000, maxImageDimension: 2000, mediaTypes: ['image/png'],
+      }
+      override readonly fileLimits: FileAttachmentLimits = {
+        maxFileBytes: 10_000_000, maxFilesPerMessage: 10, maxMessageFileBytes: 100_000_000,
+      }
+      override validateFile(): Promise<void> { return Promise.resolve() }
+      override saveFile(input: { data: Uint8Array; mediaType: string; name?: string }): Promise<FileAttachmentRef> {
+        const id = `sha256:${String(savedIds.length).padStart(64, '0')}`
+        savedIds.push(id)
+        return Promise.resolve({
+          attachmentId: AttachmentId(id),
+          mediaType: input.mediaType,
+          bytes: input.data.byteLength,
+          ...input.name === undefined ? {} : { name: input.name },
+        })
+      }
+      override readFile(): Promise<StoredFileAttachment> { return Promise.reject(new Error('not used')) }
+      validateImage(): Promise<void> { return Promise.resolve() }
+      saveImage(input: SaveImageAttachment): Promise<ImageAttachmentRef> {
+        const id = `sha256:${String(savedIds.length).padStart(64, '0')}`
+        savedIds.push(id)
+        return Promise.resolve({
+          attachmentId: AttachmentId(id),
+          mediaType: input.mediaType,
+          bytes: input.data.byteLength,
+          width: 1,
+          height: 1,
+          ...input.name === undefined ? {} : { name: input.name },
+        })
+      }
+      readImage(): Promise<StoredImageAttachment> { return Promise.reject(new Error('not used')) }
+    }
+    await ctx.plugin(FakeAttachmentStore)
+
+    const proxy = api(ctx)
+    const followup = (ctx.agents.get(session.id)?.followup ?? vi.fn()) as unknown as ReturnType<typeof vi.fn>
+
+    const removed = await proxy.sessions.regenerate(request({
+      sessionId: session.id, atSeq: userSeq, text: 'edited', removeAttachmentIds: [fileId],
+    }))
+    expect(removed.result.ok).toBe(true)
+    if (removed.result.ok) {
+      const message = followup.mock.calls[0]?.[0] as { content: readonly { type: string }[] }
+      expect(message.content.map(block => block.type)).toEqual(['text'])
+    }
+
+    const withAdditions = await proxy.sessions.regenerate(request({
+      sessionId: session.id,
+      atSeq: userSeq,
+      text: 'edited again',
+      removeAttachmentIds: [fileId],
+      additions: [{
+        type: 'file',
+        mediaType: 'text/plain',
+        data: Buffer.from('hello file').toString('base64'),
+        name: 'b.txt',
+      }],
+    }))
+    expect(withAdditions.result.ok).toBe(true)
+    if (withAdditions.result.ok) {
+      const message = followup.mock.calls[1]?.[0] as {
+        content: readonly { type: string; text?: string; attachment?: { attachmentId: string } }[]
+      }
+      expect(message.content.map(block => block.type)).toEqual(['text', 'file'])
+      expect(message.content[1]?.attachment?.attachmentId).toContain('0000')
+      expect(message.content[1]).toMatchObject({ text: 'hello file' })
+    }
     await ctx.fiber.dispose()
   })
 

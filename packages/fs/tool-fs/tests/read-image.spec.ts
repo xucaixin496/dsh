@@ -21,7 +21,15 @@ import LocalFileSystem from '@deepseek-ai/dsh-fs-local'
 import * as FsPolicy from '@deepseek-ai/dsh-fs-observation-policy'
 import LocalAttachmentStore from '@deepseek-ai/dsh-attachment-local'
 import { AttachmentError, AttachmentId, AttachmentStore } from '@deepseek-ai/dsh-attachment'
-import type { ImageAttachmentLimits, ImageAttachmentRef, SaveImageAttachment, StoredImageAttachment } from '@deepseek-ai/dsh-attachment'
+import type {
+  FileAttachmentLimits,
+  FileAttachmentRef,
+  ImageAttachmentLimits,
+  ImageAttachmentRef,
+  SaveImageAttachment,
+  StoredFileAttachment,
+  StoredImageAttachment,
+} from '@deepseek-ai/dsh-attachment'
 import * as ToolFs from '@deepseek-ai/dsh-tool-fs'
 import {
   applyReadImageTool,
@@ -339,6 +347,23 @@ describe('argument and service preconditions', () => {
         maxImageDimension: 2000,
         mediaTypes: Object.freeze(['image/jpeg'] as const),
       })
+      override readonly fileLimits: FileAttachmentLimits = {
+        maxFileBytes: 1024,
+        maxFilesPerMessage: 1,
+        maxMessageFileBytes: 1024,
+      }
+
+      override validateFile(): Promise<void> {
+        throw new Error('unreachable in this test')
+      }
+
+      override saveFile(): Promise<FileAttachmentRef> {
+        throw new Error('unreachable in this test')
+      }
+
+      override readFile(): Promise<StoredFileAttachment> {
+        throw new Error('unreachable in this test')
+      }
 
       validateImage(_input: SaveImageAttachment): Promise<void> {
         throw new Error('unreachable: admission refuses before validation')
@@ -470,6 +495,23 @@ describe('image admission failures', () => {
         maxImageDimension: 2000,
         mediaTypes: Object.freeze(['image/png'] as const),
       })
+      override readonly fileLimits: FileAttachmentLimits = {
+        maxFileBytes: 1024,
+        maxFilesPerMessage: 1,
+        maxMessageFileBytes: 1024,
+      }
+
+      override validateFile(): Promise<void> {
+        return Promise.resolve()
+      }
+
+      override saveFile(): Promise<FileAttachmentRef> {
+        throw new Error('unreachable in this test')
+      }
+
+      override readFile(): Promise<StoredFileAttachment> {
+        throw new Error('unreachable in this test')
+      }
 
       validateImage(_input: SaveImageAttachment): Promise<void> {
         return Promise.resolve()
@@ -503,7 +545,7 @@ describe('registration surface', () => {
     const attachmentsFiber = await ctx.plugin(LocalAttachmentStore, { dshHome: home })
     const toolFsFiber = await ctx.plugin(ToolFs)
     const names = () => ctx.tools.schemas().map(schema => schema.name).sort()
-    expect(names()).toEqual(['edit', 'read', 'read_image', 'write'])
+    expect(names()).toEqual(['edit', 'read', 'read_attachment', 'read_image', 'write'])
 
     // Disposing only the attachment store tears down the scoped inject fiber:
     // read_image withdraws while the unconditional tools stay registered.
@@ -512,7 +554,7 @@ describe('registration surface', () => {
 
     // Remounting the store restores the conditional registration.
     const remounted = await ctx.plugin(LocalAttachmentStore, { dshHome: home })
-    expect(names()).toEqual(['edit', 'read', 'read_image', 'write'])
+    expect(names()).toEqual(['edit', 'read', 'read_attachment', 'read_image', 'write'])
 
     // Disposing the whole plugin withdraws every tool, read_image included.
     await toolFsFiber.dispose()

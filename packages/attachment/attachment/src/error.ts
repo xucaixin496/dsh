@@ -18,6 +18,12 @@ export type ImageAdmissionErrorCode = typeof IMAGE_ADMISSION_ERROR_CODES[number]
 /** Stable attachment failure codes used for protocol error routing. */
 export type AttachmentErrorCode =
   | ImageAdmissionErrorCode
+  | 'TOO_MANY_FILES'
+  | 'FILES_TOO_LARGE'
+  | 'FILE_DENIED_MEDIA_TYPE'
+  | 'INVALID_FILE'
+  | 'FILE_TOO_LARGE'
+  | 'FILE_STORAGE_UNSUPPORTED'
   | 'INVALID_ATTACHMENT_REF'
   | 'ATTACHMENT_CORRUPT'
   | 'ATTACHMENT_WRITE_FAILED'

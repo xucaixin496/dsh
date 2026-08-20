@@ -1,6 +1,6 @@
 /** Conversation slot declarations and their composed component props. */
 import type { ReactNode, RefObject } from 'react'
-import type { ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
+import type { FileAttachmentRef, ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
 import type {
   InjectFace, MaybeSnapshotSelectorHook, PropsLocale, PropsRenderSlots, PropsRuntime, PropsStore,
   SlotHookFactory, SnapshotSelectorHook,
@@ -11,7 +11,7 @@ import type {
   TurnLocation, WorkspaceId,
 } from '@deepseek-ai/dsh-client-runtime/client'
 import type { MarkdownFileMentions } from '@deepseek-ai/dsh-client-ui-primitives'
-import type { MessageId } from '@deepseek-ai/dsh-client-connection/client'
+import type { MessageId, PromptContentPart } from '@deepseek-ai/dsh-client-connection/client'
 import type {} from '@deepseek-ai/dsh-client-ui-layout/client'
 import type { ComposerBlock } from '../input/blocks.ts'
 import type {
@@ -23,13 +23,22 @@ import type { ChatNode, ChatNodeKind } from './chat-nodes.ts'
 import type { CallId, SelectionTarget, ViewTab } from './views.ts'
 
 /** Browser-owned image that has not crossed the durable host boundary. */
-export interface ComposerAttachment {
+export interface ImageComposerAttachment {
   kind: 'image'
   id: DraftAttachmentId
   file: File
   previewUrl: string
 }
 
+/** Browser-owned non-image file that has not crossed the durable host boundary. */
+export interface FileComposerAttachment {
+  kind: 'file'
+  id: DraftAttachmentId
+  file: File
+}
+
+/** Browser-owned draft attachment (image or generic file). */
+export type ComposerAttachment = ImageComposerAttachment | FileComposerAttachment
 /** Input state handed to the optional attachment presentation plugin. */
 export interface ComposerAttachmentsOwnerProps {
   /** Browser-owned draft images in input order. */
@@ -401,6 +410,25 @@ export interface ChatNodeOwnerProps {
   openFile: (path: string) => void
   inspectCall: (callId: CallId) => void
   forkAt: (seq: number) => void
+  /**
+   * Re-run a user message in place: the host shadows the anchored message's
+   * turn and everything after it on the model surface, then answers the
+   * replacement message as the next turn in this SAME session — no branch is
+   * created. `options.text` replaces the text (omitted = original text);
+   * `removeAttachmentIds` drops those attachments from the re-run; `additions`
+   * uploads new images/files with the re-run. Resolves `false` when the host
+   * rejected the regenerate (e.g. the session is running), so an in-bubble
+   * editor can keep its draft for a retry.
+   */
+  resendAt: (seq: number, options?: {
+    text?: string
+    removeAttachmentIds?: readonly string[]
+    additions?: PromptContentPart[]
+  }) => Promise<boolean>
+  /** Resolve a session-authorized historical image for inline display. */
+  loadImage: (attachment: ImageAttachmentRef) => Promise<string>
+  /** Resolve a session-authorized historical file for download. */
+  loadFile: (attachment: FileAttachmentRef) => Promise<{ data: Uint8Array; name?: string; mediaType: string }>
   /** Render a historical image group through the attachment slot. */
   renderMessageImages: RenderMessageImages
   fileMentions: (owner: TurnTailOwnerProps) => MarkdownFileMentions | undefined
@@ -533,11 +561,11 @@ export interface ComposerBarOwnerProps {
 export interface ComposerBarInjected {
   /** The InputBar-exclusive keyboard/DOM command face (private plane); absent with the session. */
   keyboard: ComposerKeyboard | undefined
-  /** Create previews and append image ids to the session input. */
+  /** Create draft attachments (images or generic files) and append their ids to the session input. */
   addImages: ((files: readonly File[]) => string | null) | undefined
   /** Release one preview and remove its id from session input. */
   removeImage: ((id: DraftAttachmentId) => void) | undefined
-  /** Resolve ordered input ids to browser-owned draft images. */
+  /** Resolve ordered input ids to browser-owned draft attachments. */
   draftImages: ((ids: readonly DraftAttachmentId[]) => readonly ComposerAttachment[]) | undefined
   /** Resolve one keyboard submission gesture against the current running state and persisted preference. */
   resolveSubmitMode: (
@@ -736,6 +764,8 @@ export interface ChatViewInjected {
   loadOlder: () => void
   /** Resolve a session-authorized historical image for inline display. */
   loadImage: (attachment: ImageAttachmentRef) => Promise<string>
+  /** Resolve a session-authorized historical file for download. */
+  loadFile: (attachment: FileAttachmentRef) => Promise<{ data: Uint8Array; name?: string; mediaType: string }>
   /** Hand a call off to the trajectory view: write the one-shot inspect target and switch tabs. */
   inspectCall: (callId: CallId) => void
   /**
@@ -751,6 +781,19 @@ export interface ChatViewInjected {
   }
   /** Fork through the completed turn ending at the eligible message `seq`, then open the child. */
   forkAt: (seq: number) => void
+  /**
+   * Re-run the user message at `seq` in place: the host shadows its turn and
+   * everything after it, then re-answers the message in this same session.
+   * `options.text` replaces the text (omitted = original), options may also
+   * remove existing attachment ids and add new image/file uploads. Resolves
+   * `false` when the host rejected the regenerate, keeping the source view
+   * untouched.
+   */
+  resendAt: (seq: number, options?: {
+    text?: string
+    removeAttachmentIds?: readonly string[]
+    additions?: PromptContentPart[]
+  }) => Promise<boolean>
   /**
    * Prose file-mention vocabulary for one closing message, from the optional
    * {@link ChatFileMentions} service (resolved lazily per call, so composing

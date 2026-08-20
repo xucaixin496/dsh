@@ -3,23 +3,34 @@
 import { Context, Service } from '@deepseek-ai/cordis'
 import { AttachmentError } from './error.ts'
 import type {
+  FileAttachmentLimits,
+  FileAttachmentRef,
   ImageAttachmentLimits,
   ImageAttachmentRef,
+  SaveFileAttachment,
   SaveImageAttachment,
+  StoredFileAttachment,
   StoredImageAttachment,
 } from './types.ts'
 
 export { AttachmentId } from './brand.ts'
 export { AttachmentError, isImageAdmissionError } from './error.ts'
-export type { AttachmentErrorCode, ImageAdmissionErrorCode } from './error.ts'
 export { admitEncodedImages } from './admission.ts'
+export type { AttachmentErrorCode, ImageAdmissionErrorCode } from './error.ts'
+export { ocrImagePng, ocrPdfPage, tessdataDir } from './ocr.ts'
+export { extractFileText, shouldExtractText } from './text.ts'
 export type {
   AttachmentId as AttachmentIdType,
+  FileAttachmentLimits,
+  FileAttachmentRef,
+  FileMediaType,
   EncodedImageAttachment,
   ImageAttachmentLimits,
   ImageAttachmentRef,
   ImageMediaType,
+  SaveFileAttachment,
   SaveImageAttachment,
+  StoredFileAttachment,
   StoredImageAttachment,
 } from './types.ts'
 
@@ -37,6 +48,19 @@ export abstract class AttachmentStore extends Service {
 
   /** Deployment-resolved image policy used by authoritative and fast-path validation. */
   abstract readonly imageLimits: ImageAttachmentLimits
+
+  /**
+   * Deployment-resolved generic-file policy used by authoritative validation.
+   * The permissive fallback keeps image-only stores and test doubles
+   * compiling unchanged; the default file methods below throw
+   * `FILE_STORAGE_UNSUPPORTED` when a file is actually admitted.
+   */
+  readonly fileLimits: FileAttachmentLimits = {
+    maxFileBytes: Number.MAX_SAFE_INTEGER,
+    maxFilesPerMessage: Number.MAX_SAFE_INTEGER,
+    maxMessageFileBytes: Number.MAX_SAFE_INTEGER,
+    denyMediaTypes: [],
+  }
 
   /**
    * Validate one image without persisting it.
@@ -90,6 +114,44 @@ export abstract class AttachmentStore extends Service {
    * @throws the signal reason when aborted, or a storage error when verification fails.
    */
   abstract readImage(ref: ImageAttachmentRef, signal?: AbortSignal): Promise<StoredImageAttachment>
+
+  /**
+   * Validate one non-image file without persisting it.
+   * Batch callers validate every member before saving any member.
+   * @param _input - encoded bytes, declared media type, and optional display name.
+   * @returns completion after the admission policy has been applied.
+   */
+  validateFile(_input: SaveFileAttachment): Promise<void> {
+    return this.rejectFileUnsupported()
+  }
+
+  /**
+   * Validate and durably commit one non-image file before its owning session event is appended.
+   * @param _input - encoded bytes, declared media type, and optional display name.
+   * @returns a durable content-addressed reference.
+   */
+  saveFile(_input: SaveFileAttachment): Promise<FileAttachmentRef> {
+    return this.rejectFileUnsupported()
+  }
+
+  /**
+   * Read one non-image file and verify that bytes still match the recorded reference.
+   * @param _ref - durable reference from the session log.
+   * @param _signal - optional cancellation for backend read and verification work.
+   * @returns the verified bytes and canonical reference.
+   * @throws the signal reason when aborted, or a storage error when verification fails.
+   */
+  readFile(_ref: FileAttachmentRef, _signal?: AbortSignal): Promise<StoredFileAttachment> {
+    return this.rejectFileUnsupported()
+  }
+
+  /** Base default for stores that publish images only: reject any generic-file admission. */
+  private rejectFileUnsupported(): Promise<never> {
+    return Promise.reject(new AttachmentError(
+      'This attachment store does not support generic file uploads.',
+      'FILE_STORAGE_UNSUPPORTED',
+    ))
+  }
 }
 
 export default AttachmentStore

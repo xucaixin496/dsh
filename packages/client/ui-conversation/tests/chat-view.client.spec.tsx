@@ -162,6 +162,7 @@ function makeHarness(init?: Partial<ConversationSnapshot>) {
     read: () => savedScroll,
   }
   const forkAt = vi.fn()
+  const resendAt = vi.fn()
   // Selection rides the REAL chat store (same construction path as
   // production; the view reads it through the PropsStore useStore share).
   const chat = createChatStore().create()
@@ -194,7 +195,7 @@ function makeHarness(init?: Partial<ConversationSnapshot>) {
         : undefined
     })
     const nodeProps = <Kind extends ChatNode['kind']>(): ChatNodeViewProps<Kind> => (
-      { ...props, ...nodeOwner, useTurnData } as unknown as ChatNodeViewProps<Kind>
+      { ...props, ...nodeOwner, useTurnData, resendAt } as unknown as ChatNodeViewProps<Kind>
     )
     switch (nodeOwner.node.kind) {
       case 'user':
@@ -284,9 +285,11 @@ function makeHarness(init?: Partial<ConversationSnapshot>) {
     openFile,
     loadOlder,
     loadImage: vi.fn(() => Promise.reject(new Error('not used'))),
+    loadFile: async () => ({ data: new Uint8Array(), mediaType: 'application/octet-stream' }),
     inspectCall,
     chatScroll,
     forkAt,
+    resendAt,
     // Absent-service default; mention tests override with a real resolver.
     fileMentions: () => undefined,
     // Mirrors the real lookup chain (conversation namespace, then common).
@@ -295,7 +298,7 @@ function makeHarness(init?: Partial<ConversationSnapshot>) {
   const setSelection = (next: SelectionTarget | null): void => { chat.actions.select(next) }
   return {
     set, ChatView, props, openDetails, openFile, loadOlder, inspectCall,
-    chatScroll, forkAt, setSelection, toolOwners,
+    chatScroll, forkAt, resendAt, setSelection, toolOwners,
   }
 }
 
@@ -1456,5 +1459,40 @@ describe('ChatView', () => {
     const failedView = render(<failed.ChatView {...failed.props} />)
     expect(failedView.getByText('Compaction cancelled.')).toBeTruthy()
     expect(failedView.container.querySelector('[data-state="error"]')).not.toBeNull()
+  })
+
+  it('edit mode manages attachments: removable chips, add control, and resend options', () => {
+    const fileUser: UserMessageNode = {
+      kind: 'user', seq: 2, time: 2_000,
+      content: [
+        { type: 'text', text: 'read the pdf' },
+        {
+          type: 'file',
+          attachment: { attachmentId: 'sha256:abc', mediaType: 'application/pdf', bytes: 3, name: 'a.pdf' },
+          text: 'pdf text',
+        },
+      ] as never,
+      source: null,
+    }
+    const harness = makeHarness({
+      chat: chatSnapshotFixture({
+        nodes: [fileUser],
+        turnTimings: new Map([[1, { startTime: 1_000, endTime: 3_000 }]]),
+        turnEnds: new Map([[1, 3]]),
+      }),
+    })
+    const view = render(<harness.ChatView {...harness.props} />)
+
+    fireEvent.click(view.getByRole('button', { name: '编辑' }))
+    expect(view.getByText('a.pdf')).toBeTruthy()
+    expect(view.getByRole('button', { name: '添加文件' })).toBeTruthy()
+    fireEvent.click(view.getByRole('button', { name: '移除附件 a.pdf' }))
+    fireEvent.change(view.getByRole('textbox', { name: '编辑消息…' }), { target: { value: 'edited text' } })
+    fireEvent.click(view.getByRole('button', { name: '发送' }))
+
+    expect(harness.resendAt).toHaveBeenCalledWith(2, {
+      text: 'edited text',
+      removeAttachmentIds: ['sha256:abc'],
+    })
   })
 })

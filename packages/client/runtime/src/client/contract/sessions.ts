@@ -9,7 +9,7 @@
  */
 import type { Context } from '@deepseek-ai/cordis'
 import type {
-  RpcResult, SessionId, SubagentAddress,
+  PromptContentPart, RpcResult, SessionId, SubagentAddress,
 } from '@deepseek-ai/dsh-api-remotes/client'
 import type { HostObservable, SessionMaybeProvideInfo } from '@deepseek-ai/dsh-client-ui-slots'
 import type { AgentContext } from '../agents/scope.ts'
@@ -90,11 +90,33 @@ export interface ISessions {
    * @param opts - source session id, the optional event seq anchoring the
    *   cut (the boundary is the first turn/end at or after it; an in-log
    *   anchor in an open turn is unavailable rather than clipped backward),
-   *   and whether to increment an inherited durable title before resolving.
+   *   the optional exclusive anchor (the child seed ends before the turn
+   *   containing it), and whether to increment an inherited durable title
+   *   before resolving.
    * @returns the child session id.
    * @throws when the fork fails, or when a requested child-title rename fails after creation.
    */
-  fork(opts: { sessionId: SessionId; atSeq?: number; increaseTitle?: boolean }): Promise<SessionId>
+  fork(opts: {
+    sessionId: SessionId
+    atSeq?: number
+    beforeTurnSeq?: number
+    increaseTitle?: boolean
+  }): Promise<SessionId>
+  /**
+   * Re-run one user message in place: the host shadows the anchored message's
+   * turn and everything after it on the model surface, then answers the
+   * replacement message as the next turn in this SAME session — no branch is
+   * created. Rejected while the session is running or has queued input.
+   * @param opts - session id, the anchored user-message seq, and optional edited text.
+   * @returns the regenerate result.
+   */
+  regenerate(opts: {
+    sessionId: SessionId
+    atSeq: number
+    text?: string
+    removeAttachmentIds?: string[]
+    additions?: PromptContentPart[]
+  }): Promise<RpcResult<{ accepted: true }>>
   /**
    * Register a per-session standard-props provider (hooks become `use<Name>`
    * selector hooks on the render side; props spread verbatim).

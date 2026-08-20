@@ -80,6 +80,12 @@ export interface UserMessageNode {
   time: number
   content: readonly ContentBlock[]
   source: unknown
+  /**
+   * Surface node seqs this message shadowed (a regenerate rollback). Absent on
+   * ordinary appended messages; present only on the replacement message that
+   * re-runs a user prompt in place, hiding the shadowed turns from the chat.
+   */
+  shadowedSeqs?: readonly number[]
 }
 
 /** Recorded boundaries used to derive assistant latency and throughput. */
