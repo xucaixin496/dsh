@@ -96,13 +96,16 @@ export function InputBar({
   const fileLimits = useProjection('fileLimits')
   // Prompt failures are ordinary failures (no create/attach transaction exists
   // anymore): the toast announces promptError, the draft stays in the machine,
-  // and the user resubmits. A remount over a session whose machine still holds
-  // an unresolved promptError deliberately re-announces it once — the failure
-  // is still pending, and a transient banner is its only surface. Attachment
-  // rejections show product copy keyed by the wire reason; other codes are
-  // developer-facing and keep the raw message plus code.
+  // and the user resubmits. Only errors that arrive while this composer is
+  // mounted are announced; an error already held by a reused blank session is
+  // stale from a previous attempt and must not masquerade as a New Session
+  // failure. Attachment rejections show product copy keyed by the wire reason;
+  // other codes are developer-facing and keep the raw message plus code.
+  const mountedPromptError = useRef(promptError)
   useEffect(() => {
-    if (promptError === null) return
+    const previousPromptError = mountedPromptError.current
+    mountedPromptError.current = promptError
+    if (previousPromptError === promptError || promptError === null) return
     showToast(promptError.error.code === 'attachment-error'
       ? attachmentErrorText(t, promptError.error.details.reason, imageLimits)
       : `${promptError.error.message} (${promptError.error.code})`)

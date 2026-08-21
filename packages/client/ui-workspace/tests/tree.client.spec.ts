@@ -79,7 +79,7 @@ describe('deriveGroups', () => {
     const groups = deriveGroups(
       sessions, [workspace('first', ['shown', 'current-blank', 'stale-blank'])], noArchive, view(['first']),
     )
-    expect(groups[0]!.sessions.map(session => session.id)).toEqual([real.id, currentBlank.id])
+    expect(groups[0]!.sessions.map(session => session.id)).toEqual([currentBlank.id, real.id])
     const blankNode = groups[0]!.sessions.find(session => session.id === currentBlank.id)!
     // The stored placeholder title stays canonical; the renderer swaps in
     // the localized New Session label via the blank flag.
@@ -90,6 +90,16 @@ describe('deriveGroups', () => {
     // A non-current blank stray never surfaces an Ungrouped bucket either.
     const strayGroups = deriveGroups(list({ ...summary('stray', 2), blank: true }), [workspace('first', [])], noArchive, view())
     expect(strayGroups.map(group => group.key)).toEqual(['first'])
+  })
+
+  it('lifts the current blank session above newer flat rows without changing its summary time', () => {
+    const currentBlank = { ...summary('current-blank', 1), blank: true }
+    const sessions = {
+      ...list(summary('newer', 30), summary('older', 20), currentBlank),
+      current: currentBlank.id,
+    }
+    const rows = deriveFlat(sessions, noArchive)
+    expect(rows.map(row => row.id)).toEqual([currentBlank.id, sid('newer'), sid('older')])
   })
 
   it('projects the completion reminder into session and search rows (absent = false)', () => {

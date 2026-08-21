@@ -324,14 +324,30 @@ describe('image draft rail', () => {
       op: 'send',
       error: { code: 'attachment-error', message: 'raw wire text', details: { reason } },
     })
-    const model = bench({ promptError: attachmentError('MODEL_DOES_NOT_SUPPORT_IMAGES') })
+    const model = bench()
+    act(() => {
+      model.session.set({
+        ...model.session.getSnapshot(),
+        promptError: attachmentError('MODEL_DOES_NOT_SUPPORT_IMAGES'),
+      })
+    })
     expect(model.view.getByRole('alert').textContent).toContain('当前模型不支持图片，请切换支持图片的模型')
     cleanup()
-    const unknown = bench({ promptError: attachmentError('ATTACHMENT_NOT_REFERENCED') })
+    const unknown = bench()
+    act(() => {
+      unknown.session.set({
+        ...unknown.session.getSnapshot(),
+        promptError: attachmentError('ATTACHMENT_NOT_REFERENCED'),
+      })
+    })
     expect(unknown.view.getByRole('alert').textContent).toContain('图片发送失败（ATTACHMENT_NOT_REFERENCED）')
     cleanup()
-    const other = bench({
-      promptError: { op: 'send', error: { code: 'internal', message: 'boom', details: {} } },
+    const other = bench()
+    act(() => {
+      other.session.set({
+        ...other.session.getSnapshot(),
+        promptError: { op: 'send', error: { code: 'internal', message: 'boom', details: {} } },
+      })
     })
     expect(other.view.getByRole('alert').textContent).toContain('boom (internal)')
   })
@@ -1289,7 +1305,14 @@ describe('strips and variants', () => {
   it('announces promptError as a fading toast (ordinary failure — no transaction UI, no Retry)', () => {
     vi.useFakeTimers()
     try {
-      const send = bench({ promptError: { op: 'send', error: { code: 'agent-busy', message: 'boom', details: { reason: 'boom' } } } })
+      const send = bench()
+      expect(send.view.queryByRole('alert')).toBeNull()
+      act(() => {
+        send.session.set({
+          ...send.session.getSnapshot(),
+          promptError: { op: 'send', error: { code: 'agent-busy', message: 'boom', details: { reason: 'boom' } } },
+        })
+      })
       // The toast body-portals (transformed ancestors must not trap it), so
       // queries go through the view's document-bound helpers.
       expect(send.view.getByRole('alert').textContent).toContain('boom (agent-busy)')
@@ -1299,6 +1322,22 @@ describe('strips and variants', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+
+  it('does not replay an already-held promptError when a blank session composer is remounted', () => {
+    const failure = {
+      op: 'send' as const,
+      error: { code: 'agent-busy' as const, message: 'busy', details: { reason: 'stale' } },
+    }
+    const first = bench()
+    act(() => {
+      first.session.set({ ...first.session.getSnapshot(), promptError: failure })
+    })
+    expect(first.view.getByRole('alert').textContent).toContain('busy (agent-busy)')
+    cleanup()
+    const second = render(<InputBar {...first.props} />)
+    expect(second.queryByRole('alert')).toBeNull()
+    cleanup()
   })
 
   it('announces an error notice from the machine store as a fading toast', () => {

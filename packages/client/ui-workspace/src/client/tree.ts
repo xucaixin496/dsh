@@ -109,6 +109,17 @@ function byRecency(a: SessionSummary, b: SessionSummary): number {
   return a.id < b.id ? -1 : 1
 }
 
+/** Lift the selected blank row above durable order: a reused New Session placeholder reads as new. */
+function hoistCurrentBlank(
+  sessions: readonly SessionSummary[],
+  current: SessionId | undefined,
+): SessionSummary[] {
+  const currentBlank = sessions.find(session => session.blank && session.id === current)
+  return currentBlank === undefined
+    ? [...sessions]
+    : [currentBlank, ...sessions.filter(session => session !== currentBlank)]
+}
+
 /**
  * Ordinary sessions are visible; among blank sessions, only the current one
  * is visible. Subagent children use their parent header catalog; archived
@@ -190,7 +201,8 @@ function groupByWorkspace(
     }
     groups.push(buildGroup(
       workspace.workspaceId, workspace.workspaceId, workspace.path,
-      Date.parse(workspace.createdAt), workspace.title, members, 'account',
+      Date.parse(workspace.createdAt), workspace.title,
+      hoistCurrentBlank(members, list.current), 'account',
     ))
   }
   const stray = list.ids
@@ -204,7 +216,10 @@ function groupByWorkspace(
       undefined,
       undefined,
       UNGROUPED_LABEL,
-      ungroupedOrder === undefined ? stray : orderedUngrouped(stray, ungroupedOrder),
+      hoistCurrentBlank(
+        ungroupedOrder === undefined ? stray : orderedUngrouped(stray, ungroupedOrder),
+        list.current,
+      ),
       ungroupedOrder === undefined ? 'recency' : 'account',
     ))
   }
@@ -274,7 +289,8 @@ export function deriveGroups(
 
 /**
  * Derive the flat session list ("In one list" mode): every session — fork
- * children included — as a top-level row, strictly newest-first. No grouping,
+ * children included — as a top-level row, newest-first except that the selected
+ * blank placeholder is provisional and therefore leads the list. No grouping,
  * no parent/child adjacency. Content search lives outside this derivation
  * (see {@link deriveSearchResults}).
  * @param list - sessions list snapshot.
@@ -294,7 +310,7 @@ export function deriveFlat(
     rows.push(s)
   }
   rows.sort(byRecency)
-  return rows.map(session => sessionNode(session, descendants))
+  return hoistCurrentBlank(rows, list.current).map(session => sessionNode(session, descendants))
 }
 
 /** Relative-time bucket of a session row's trailing label. */

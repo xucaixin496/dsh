@@ -500,9 +500,9 @@ describe('ConversationRoot resident composer', () => {
   })
 
   it('prompt failure renders the promptError strip (ordinary failure, no transaction UI)', () => {
-    const b = mount(conversationSnapshot({
-      promptError: { op: 'send', error: { code: 'offline', message: 'Message send failed' } as never },
-    }))
+    const failure = { op: 'send' as const, error: { code: 'offline', message: 'Message send failed' } as never }
+    const b = mount(conversationSnapshot())
+    act(() => { b.session.set({ ...b.session.getSnapshot(), promptError: failure }) })
     expect(b.view.getByRole('alert').textContent).toContain('Message send failed (offline)')
     expect(b.view.queryByRole('button', { name: 'Retry' })).toBeNull()
   })
