@@ -84,7 +84,7 @@ import type { SettingsDescriptor, SettingsNamespace, SettingsPathOp } from '@dee
 import { credentialRef } from '@deepseek-ai/dsh-credentials'
 // Value edge: the rename impl narrows the title service's validation failure; the import also resolves `ctx.get('sessionTitle')`.
 import { SessionTitleInvalidError } from '@deepseek-ai/dsh-session-title'
-import type { CallId } from '@deepseek-ai/dsh-llm/brand'
+import { CallId } from '@deepseek-ai/dsh-llm/brand'
 import type { ScopeKey } from '@deepseek-ai/dsh-scope'
 import type { ApprovalOutcome, ApprovalRequestId } from '@deepseek-ai/dsh-user-approval'
 // Side-effect type import: resolves the `approval/request` waterfall and
@@ -121,6 +121,8 @@ const SESSION_SEARCH_PROVIDER_CALL_LIMIT = 100
 const COLD_SUMMARY_BATCH_SIZE = 16
 /** Default maximum artifact size eligible for one cold blankness read. */
 export const DEFAULT_COLD_BLANK_PROBE_MAX_BYTES = 1024
+/** Cap on extracted file text inlined into the model prompt per file; larger text is spilled to disk and read in chunks. */
+export const MAX_INLINE_FILE_CHARS = 20_000
 
 /** Conversation message event types (the pagination counting unit). */
 const MESSAGE_TYPES = new Set(['user/message', 'assistant/message'])
@@ -147,9 +149,50 @@ function pendingInboxMessageCount(events: readonly SessionEvent[]): number {
   return nextTurn.length + nextStep.length
 }
 
-/** Validate one prompt as a batch before publishing any durable attachment object. */
+/** Minimal structural view of the optional `ctx.spillStore` seam (avoiding a
+ * project-reference edge into dsh-spill from this package). */
+interface SpillLike {
+  saveText(input: {
+    owner: { sessionId: SessionId }
+    source: { toolName: string; callId: CallId; label: string }
+    suggestedName: string
+    content: string
+  }): Promise<{ locator: string; bytes: number; retrievalHint: string }>
+}
+
+/**
+ * Project an oversized extracted file text for the model: persist it to the
+ * session-scoped spill store and hand the model the path plus chunked-read
+ * guidance instead of inlining the whole document (relay/upstream endpoints
+ * commonly return empty completions for very large single-turn prompts).
+ * Falls back to the inline text when no spill backend is mounted or the write
+ * fails (best effort).
+ */
+async function spillAttachmentText(
+  ctx: Context,
+  sessionId: SessionId,
+  attachment: FileAttachmentRef,
+  text: string,
+): Promise<string> {
+  const spill = (ctx as { spillStore?: SpillLike }).spillStore
+  if (spill === undefined) return text
+  try {
+    const saved = await spill.saveText({
+      owner: { sessionId },
+      source: { toolName: 'read_attachment', callId: CallId('attachment-spill'), label: 'attachment' },
+      suggestedName: `${attachment.name ?? 'attachment'}.txt`,
+      content: text,
+    })
+    return '文件内容过大（共 ' + text.length + ' 字符），未全文载入。完整提取文本已保存到: '
+      + saved.locator
+      + '。请使用 read 工具按 offset/limit 分段读取，或用 grep 在该路径内搜索；不要使用 read_attachment（它会一次性返回全文）。'
+  } catch {
+    return text
+  }
+}
+
 /** Validate one prompt as a batch before publishing any durable image object. */
-async function durablePromptContent(ctx: Context, content: readonly PromptContentPart[]): Promise<ContentBlock[]> {
+export async function durablePromptContent(ctx: Context, sessionId: SessionId, content: readonly PromptContentPart[]): Promise<ContentBlock[]> {
   if (content.every(part => part.type === 'text')) {
     return content.map(part => ({ type: 'text', text: part.text }))
   }
@@ -206,7 +249,12 @@ async function durablePromptContent(ctx: Context, content: readonly PromptConten
       ...item.part.name === undefined ? {} : { name: item.part.name },
     })
     const text = await extractFileText(item.data, item.part.mediaType, item.part.name)
-    blocks.push({ type: 'file', attachment, ...(text === undefined ? {} : { text }) })
+    if (text !== undefined && text.length > MAX_INLINE_FILE_CHARS) {
+      const spilled = await spillAttachmentText(ctx, sessionId, attachment, text)
+      blocks.push({ type: 'file', attachment, text: spilled })
+    } else {
+      blocks.push({ type: 'file', attachment, ...(text === undefined ? {} : { text }) })
+    }
   }
   return blocks
 }
@@ -2632,7 +2680,7 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
         let content: ContentBlock[] = kept
         if (additions !== undefined && additions.length > 0) {
           try {
-            content = [...kept, ...await durablePromptContent(ctx, additions)]
+            content = [...kept, ...await durablePromptContent(ctx, sessionId, additions)]
           } catch (error: unknown) {
             if (error instanceof AttachmentError) {
               return err(request, {
@@ -2702,7 +2750,7 @@ export function createApiProxy(ctx: Context, defaults: ApiProxyDefaults): ApiPro
                 })
               }
             }
-            const durable = await durablePromptContent(ctx, content)
+            const durable = await durablePromptContent(ctx, sessionId, content)
             const message: UserMessage = createUserMessage({ content: durable, source })
             if (mode === 'steer') agent.steer(message)
             else agent.followup(message)
