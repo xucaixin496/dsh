@@ -2,7 +2,7 @@
 
 import type {
   AttachmentRailLabels, DropOverlayLabels, FileChipLabels, ImageLightboxLabels, MessageImageLabels,
-} from '@deepseek-ai/dsh-client-ui-attachment'
+} from '@deepseek-ai/dsh-client-ui-attachment/client'
 import type { FileAttachmentLimits, ImageAttachmentLimits } from '@deepseek-ai/dsh-attachment'
 import type { Translate } from '@deepseek-ai/dsh-client-ui-slots'
 import type { ConversationKey } from './locales.ts'

@@ -1,14 +1,12 @@
-/** Host half of the browser-only attachment presentation plugin. */
+/** Host half of the browser-only attachment atoms package. */
 
-export { AttachmentRail } from './AttachmentRail.tsx'
-export type { AttachmentRailItem, AttachmentRailLabels } from './AttachmentRail.tsx'
-export { FileChip } from './FileChip.tsx'
-export type { FileChipLabels, FileChipValue } from './FileChip.tsx'
-export { DropOverlay } from './DropOverlay.tsx'
-export type { DropOverlayLabels } from './DropOverlay.tsx'
-export { ImageLightbox } from './ImageLightbox.tsx'
-export type { ImageLightboxLabels } from './ImageLightbox.tsx'
-export { ImageGallery, MessageImage } from './MessageImage.tsx'
-export type { ImageLoader, MessageImageLabels } from './MessageImage.tsx'
-/** No host-side behavior; the client half registers the React slot entries. */
+/** No host-side behavior; the client half exports the React atoms. */
 export function apply(): void {}
+
+// Type-only re-exports keep the package root usable for type imports without
+// pulling the React components (and their CSS) into the Node loader.
+export type { AttachmentRailItem, AttachmentRailLabels } from './AttachmentRail.tsx'
+export type { FileChipLabels, FileChipValue } from './FileChip.tsx'
+export type { DropOverlayLabels } from './DropOverlay.tsx'
+export type { ImageLightboxLabels } from './ImageLightbox.tsx'
+export type { ImageLoader, MessageImageLabels } from './MessageImage.tsx'

@@ -12,8 +12,8 @@ import clsx from 'clsx'
 import {
   IconPlusOutline16, IconWarningOutline16, Toast, Tooltip,
 } from '@deepseek-ai/dsh-client-ui-primitives'
-import { AttachmentRail, DropOverlay, ImageLightbox } from '@deepseek-ai/dsh-client-ui-attachment'
-import type { AttachmentRailItem } from '@deepseek-ai/dsh-client-ui-attachment'
+import { AttachmentRail, DropOverlay, ImageLightbox } from '@deepseek-ai/dsh-client-ui-attachment/client'
+import type { AttachmentRailItem } from '@deepseek-ai/dsh-client-ui-attachment/client'
 // Type-only: the `plan` projection key merge (the TodoDock posture — the
 // composer reads a host-computed value; the domain owns the key).
 import type {} from '@deepseek-ai/dsh-plan-mode/client'

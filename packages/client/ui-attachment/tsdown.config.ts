@@ -1,35 +1,11 @@
-import { clientOnly } from '../tsdown.client.ts'
+import { clientBundle } from '../tsdown.client.ts'
 
 /**
- * ui-attachment is browser-only, but its lib bundle IS imported under plain
- * Node (dsh-client-web / the host reads the lib). CSS imports are therefore
- * stubbed to empty modules: the hashed class maps only matter in bundler
- * contexts (vite / web shell), which compile src directly and never read lib.
- * `clientOnly` emits only the Node-side lib and skips a client plugin entry —
- * this package has no client-half in the custom fork (attachment rendering
- * lives in ui-conversation, not as a separate plugin).
+ * Browser-only atoms: the Node half stays a no-op (the loader imports it
+ * through the web profile include), while the client half ships the React
+ * components with CSS inlined the same way every other UI plugin bundle does.
  */
-const cssStub = {
-  name: 'dsh-css-stub',
-  resolveId(source: string) {
-    if (!source.endsWith('.css')) return null
-    return `\0dsh-css-stub:${source}.mjs`
-  },
-  load(id: string) {
-    if (!id.startsWith('\0dsh-css-stub:')) return null
-    return 'export default {};'
-  },
-}
-
-export default clientOnly([{
-  name: '@deepseek-ai/dsh-client-ui-attachment',
-  entry: ['lib/types/index.js', 'lib/types/invariant.js'],
-  outDir: 'lib',
-  format: ['esm'],
-  platform: 'node',
-  target: 'es2024',
-  fixedExtension: false,
-  dts: false,
-  clean: false,
-  plugins: [cssStub],
-}])
+export default clientBundle(
+  '@deepseek-ai/dsh-client-ui-attachment',
+  ['lib/types/index.js', 'lib/types/invariant.js'],
+)

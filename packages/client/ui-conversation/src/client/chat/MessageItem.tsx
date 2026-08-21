@@ -10,7 +10,7 @@ import type {
   ModelRetryNode, TurnErrorNode, UserMessageNode,
 } from '@deepseek-ai/dsh-client-runtime/client'
 import { JsonBlock, MessageText, StateDot } from '@deepseek-ai/dsh-client-ui-primitives'
-import { FileChip } from '@deepseek-ai/dsh-client-ui-attachment'
+import { FileChip } from '@deepseek-ai/dsh-client-ui-attachment/client'
 import { messageFileLabels } from '../image-labels.ts'
 import type { ChatNodeOwnerProps, ChatNodeViewProps, ChatViewSlotProps } from '../contract/slots.ts'
 import { ReferenceIcon } from '../reference/ReferenceIcon.tsx'
