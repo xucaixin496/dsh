@@ -734,7 +734,7 @@ describe('mapStopReason / mapUsage', () => {
     expect(mapStopReason(assistant({ stopReason: 'stop' }))).toEqual({
       kind: 'error',
       failure: {
-        message: 'model "deepseek-v4-flash" returned a completed response with no content',
+        message: '模型 "deepseek-v4-flash" 返回了空响应（没有生成任何内容）。常见于中转站/上游对超大请求返回空完成：可尝试缩小单轮输入、拆分大文件，或更换路由/模型后重试',
         code: EMPTY_RESPONSE_CODE,
       },
     })
